@@ -12,7 +12,7 @@
     "packages/*"
   ],
   "scripts": {
-    "build": "npm run build --workspaces --if-present",
+    "build": "npm run build -w @dbp-wp/core && npm run build -w @dbp-wp/ui && npm run build -w dbp-wp",
     "dev": "npm run dev --workspace @dbp-wp/ui",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -24,7 +24,9 @@
     "@eslint/js": "^9.13.0",
     "@types/node": "^22.7.5",
     "eslint": "^9.13.0",
+    "eslint-plugin-svelte": "^2.46.0",
     "prettier": "^3.3.3",
+    "prettier-plugin-svelte": "^3.2.6",
     "typescript": "^5.6.3",
     "typescript-eslint": "^8.10.0",
     "vitest": "^2.1.3"

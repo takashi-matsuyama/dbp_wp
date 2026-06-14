@@ -1,0 +1,28 @@
+{
+  "name": "dbp-wp",
+  "version": "0.0.0",
+  "description": "DBP WP CLI: starts a localhost server, serves the UI, and opens the browser.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "bin": {
+    "dbp-wp": "./dist/index.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "@dbp-wp/core": "*",
+    "@dbp-wp/ui": "*"
+  },
+  "devDependencies": {
+    "tsup": "^8.3.0"
+  }
+}
