@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseBatchUpdates } from './updates';
+import { parseBatchUpdates, parseMetaDelete } from './updates';
 
 describe('parseBatchUpdates', () => {
   it('parses valid updates with editable fields', () => {
@@ -40,5 +40,61 @@ describe('parseBatchUpdates', () => {
     expect(parseBatchUpdates({ updates: [{ id: 1, menuOrder: 2_147_483_647 }] })).toEqual([
       { id: 1, fields: { menuOrder: 2_147_483_647 } },
     ]);
+  });
+
+  it('parses meta alongside fields and as a meta-only row', () => {
+    expect(
+      parseBatchUpdates({
+        updates: [
+          { id: 1, title: 'Hi', meta: { price: '10', stock: 4, active: true, note: null } },
+          { id: 2, meta: { sku: 'A1' } },
+        ],
+      }),
+    ).toEqual([
+      { id: 1, fields: { title: 'Hi' }, meta: { price: '10', stock: 4, active: true, note: null } },
+      { id: 2, fields: {}, meta: { sku: 'A1' } },
+    ]);
+  });
+
+  it('treats an empty meta object as no meta (and rejects a row with nothing to do)', () => {
+    expect(parseBatchUpdates({ updates: [{ id: 1, title: 'Hi', meta: {} }] })).toEqual([
+      { id: 1, fields: { title: 'Hi' } },
+    ]);
+    expect(parseBatchUpdates({ updates: [{ id: 1, meta: {} }] })).toBeNull();
+  });
+
+  it('rejects non-scalar meta values and non-object meta', () => {
+    expect(parseBatchUpdates({ updates: [{ id: 1, meta: { a: { nested: 1 } } }] })).toBeNull();
+    expect(parseBatchUpdates({ updates: [{ id: 1, meta: { a: [1, 2] } }] })).toBeNull();
+    expect(parseBatchUpdates({ updates: [{ id: 1, meta: [1, 2] }] })).toBeNull();
+    expect(parseBatchUpdates({ updates: [{ id: 1, meta: 'x' }] })).toBeNull();
+  });
+
+  it('keeps a literal __proto__ meta key without polluting the prototype', () => {
+    const parsed = parseBatchUpdates(
+      JSON.parse('{"updates":[{"id":1,"meta":{"__proto__":"kept","sku":"A1"}}]}'),
+    );
+    expect(parsed).not.toBeNull();
+    const meta = parsed?.[0]?.meta ?? {};
+    expect(Object.keys(meta)).toEqual(expect.arrayContaining(['__proto__', 'sku']));
+    expect(({} as Record<string, unknown>)['kept']).toBeUndefined();
+  });
+});
+
+describe('parseMetaDelete', () => {
+  it('parses a valid id and keys, dropping empty/non-string entries', () => {
+    expect(parseMetaDelete({ id: 7, keys: ['price', '', 3, '_rel'] })).toEqual({
+      id: 7,
+      keys: ['price', '_rel'],
+    });
+  });
+
+  it('rejects a bad id, missing/empty keys, or non-object body', () => {
+    expect(parseMetaDelete({ id: 0, keys: ['price'] })).toBeNull();
+    expect(parseMetaDelete({ id: 1.5, keys: ['price'] })).toBeNull();
+    expect(parseMetaDelete({ id: 7, keys: [] })).toBeNull();
+    expect(parseMetaDelete({ id: 7, keys: [1, ''] })).toBeNull();
+    expect(parseMetaDelete({ id: 7 })).toBeNull();
+    expect(parseMetaDelete(null)).toBeNull();
   });
 });

@@ -3,7 +3,7 @@ import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { readCredentials, readPort } from './config';
 import { openBrowser } from './open-browser';
-import { createDbpServer } from './server';
+import { createDbpServer, type ConnectionState } from './server';
 
 /**
  * Locate the built UI assets. Works both in the workspace (symlinked package) and
@@ -25,7 +25,7 @@ function resolveUiDir(): string | null {
 
 function main(): void {
   // Credentials live in memory only; the env vars seed an initial connection.
-  const state = { credentials: readCredentials() };
+  const state: ConnectionState = { credentials: readCredentials(), connectorAvailable: null };
   const port = readPort();
   const uiDir = resolveUiDir();
 

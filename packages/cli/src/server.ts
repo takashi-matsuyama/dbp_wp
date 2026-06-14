@@ -2,10 +2,10 @@ import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { extname, join, relative, resolve } from 'node:path';
-import { WpClient, type WpCredentials } from '@dbp-wp/core';
+import { WpClient, WpRequestError, type WpCredentials } from '@dbp-wp/core';
 import { parseCredentialsInput } from './config';
 import { isAllowedHost, isCrossSiteRequest, isJsonContentType } from './host';
-import { parseBatchUpdates } from './updates';
+import { parseBatchUpdates, parseMetaDelete } from './updates';
 
 const MIME: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -24,6 +24,11 @@ const MAX_BODY_BYTES = 1_000_000;
 /** Mutable connection state, held in memory only (never written to disk). */
 export interface ConnectionState {
   credentials: WpCredentials | null;
+  /**
+   * Whether the companion plugin is active on the connected site. `null` until first
+   * detected (e.g. an env-seeded connection that has not been probed yet).
+   */
+  connectorAvailable: boolean | null;
 }
 
 export interface ServerOptions {
@@ -145,13 +150,64 @@ async function handlePostsBatch(
   const results: Array<{ id: number; ok: boolean; error?: string }> = [];
   for (const update of updates) {
     try {
-      await client.updatePost(update.id, update.fields);
+      // Standard fields and connector meta ride a single request per row.
+      await client.updatePost(update.id, update.fields, 'posts', update.meta);
       results.push({ id: update.id, ok: true });
     } catch (e) {
       results.push({ id: update.id, ok: false, error: e instanceof Error ? e.message : 'Update failed' });
     }
   }
   sendJson(res, 200, { results });
+}
+
+async function handleMetaDelete(
+  req: IncomingMessage,
+  res: ServerResponse,
+  options: ServerOptions,
+): Promise<void> {
+  if (req.method !== 'DELETE') {
+    sendJson(res, 405, { error: 'Method not allowed' });
+    return;
+  }
+  if (!isJsonContentType(req.headers['content-type'])) {
+    sendJson(res, 415, { error: 'Content-Type must be application/json.' });
+    return;
+  }
+  const credentials = options.state.credentials;
+  if (!credentials) {
+    sendJson(res, 409, { error: 'Not connected' });
+    return;
+  }
+
+  let body: unknown;
+  try {
+    body = await readJsonBody(req);
+  } catch (e) {
+    sendJson(res, 400, { error: e instanceof Error ? e.message : 'Invalid request body' });
+    return;
+  }
+  const request = parseMetaDelete(body);
+  if (!request) {
+    sendJson(res, 400, { error: 'Invalid meta-delete payload.' });
+    return;
+  }
+
+  try {
+    const client = new WpClient(credentials);
+    const result = await client.deletePostMeta(request.id, request.keys);
+    sendJson(res, 200, result);
+  } catch (e) {
+    if (!res.headersSent) {
+      if (e instanceof WpRequestError && e.status === 404) {
+        // A 404 on the connector route means the companion plugin is not active.
+        sendJson(res, 409, {
+          error: 'The companion plugin is required to delete meta, but it was not found on the site.',
+        });
+      } else {
+        sendJson(res, 502, { error: e instanceof Error ? e.message : 'Meta delete failed' });
+      }
+    }
+  }
 }
 
 async function handleConnection(
@@ -161,13 +217,29 @@ async function handleConnection(
 ): Promise<void> {
   if (req.method === 'GET') {
     const c = options.state.credentials;
-    sendJson(res, 200, { connected: c !== null, siteUrl: c?.siteUrl ?? null });
+    // Lazily detect the connector for connections that were never probed (e.g. seeded
+    // from env vars), caching the result so we only hit the REST index once. Concurrent
+    // first requests may probe more than once (benign; detection is deterministic), and a
+    // transient probe failure caches restricted mode until the next reconnect.
+    if (c && options.state.connectorAvailable === null) {
+      try {
+        options.state.connectorAvailable = await new WpClient(c).detectConnector();
+      } catch {
+        options.state.connectorAvailable = false;
+      }
+    }
+    sendJson(res, 200, {
+      connected: c !== null,
+      siteUrl: c?.siteUrl ?? null,
+      connectorAvailable: options.state.connectorAvailable ?? false,
+    });
     return;
   }
 
   if (req.method === 'DELETE') {
     options.state.credentials = null;
-    sendJson(res, 200, { connected: false, siteUrl: null });
+    options.state.connectorAvailable = null;
+    sendJson(res, 200, { connected: false, siteUrl: null, connectorAvailable: false });
     return;
   }
 
@@ -205,7 +277,17 @@ async function handleConnection(
       return;
     }
     options.state.credentials = credentials;
-    sendJson(res, 200, { connected: true, siteUrl: credentials.siteUrl });
+    // Detect the companion plugin; absence is not a connection failure (restricted mode).
+    try {
+      options.state.connectorAvailable = await client.detectConnector();
+    } catch {
+      options.state.connectorAvailable = false;
+    }
+    sendJson(res, 200, {
+      connected: true,
+      siteUrl: credentials.siteUrl,
+      connectorAvailable: options.state.connectorAvailable,
+    });
     return;
   }
 
@@ -224,6 +306,10 @@ async function handleApiRoutes(
   }
   if (url.pathname === '/api/posts/batch') {
     await handlePostsBatch(req, res, options);
+    return;
+  }
+  if (url.pathname === '/api/posts/meta') {
+    await handleMetaDelete(req, res, options);
     return;
   }
   if (url.pathname === '/api/posts') {

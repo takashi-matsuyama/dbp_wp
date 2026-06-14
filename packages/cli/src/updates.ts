@@ -4,6 +4,8 @@ import type { UpdatePostFields } from '@dbp-wp/core';
 export interface BatchUpdate {
   id: number;
   fields: UpdatePostFields;
+  /** Arbitrary meta to write via the companion plugin (omitted when none/empty). */
+  meta?: Record<string, unknown>;
 }
 
 /** Maximum updates accepted in one batch request. */
@@ -62,10 +64,81 @@ export function parseBatchUpdates(body: unknown): BatchUpdate[] | null {
       fields.status = record.status;
     }
 
-    if (Object.keys(fields).length === 0) {
+    let meta: Record<string, unknown> | undefined;
+    if (record.meta !== undefined) {
+      const parsedMeta = parseMetaInput(record.meta);
+      if (parsedMeta === null) {
+        return null;
+      }
+      if (Object.keys(parsedMeta).length > 0) {
+        meta = parsedMeta;
+      }
+    }
+
+    if (Object.keys(fields).length === 0 && meta === undefined) {
       return null;
     }
-    result.push({ id: record.id, fields });
+    result.push(meta !== undefined ? { id: record.id, fields, meta } : { id: record.id, fields });
   }
   return result;
+}
+
+/**
+ * Validate a meta map from untrusted input: a plain object whose values are scalars
+ * (string / number / boolean) or null, with non-empty keys. Returns null on any
+ * malformed shape. The companion plugin writes scalar values only.
+ */
+export function parseMetaInput(value: unknown): Record<string, unknown> | null {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return null;
+  }
+  // Null-prototype map so pathological keys (`__proto__`, `constructor`) are stored as
+  // ordinary own properties rather than dropped or touching any object prototype.
+  const result: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
+  for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
+    if (key.length === 0) {
+      return null;
+    }
+    if (
+      entry !== null &&
+      typeof entry !== 'string' &&
+      typeof entry !== 'number' &&
+      typeof entry !== 'boolean'
+    ) {
+      return null;
+    }
+    result[key] = entry;
+  }
+  return result;
+}
+
+/** A validated per-post meta-deletion request. */
+export interface MetaDelete {
+  id: number;
+  keys: string[];
+}
+
+/**
+ * Validate a meta-delete payload from untrusted input. Returns null unless `id` is a
+ * positive integer and `keys` is an array with at least one non-empty string
+ * (non-string / empty entries are dropped).
+ */
+export function parseMetaDelete(body: unknown): MetaDelete | null {
+  if (typeof body !== 'object' || body === null) {
+    return null;
+  }
+  const record = body as Record<string, unknown>;
+  if (typeof record.id !== 'number' || !Number.isSafeInteger(record.id) || record.id <= 0) {
+    return null;
+  }
+  if (!Array.isArray(record.keys)) {
+    return null;
+  }
+  const keys = record.keys.filter(
+    (key): key is string => typeof key === 'string' && key.length > 0,
+  );
+  if (keys.length === 0) {
+    return null;
+  }
+  return { id: record.id, keys };
 }

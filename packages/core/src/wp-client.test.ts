@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildAuthHeader,
   buildMetaBody,
+  buildPostBody,
   buildUpdateBody,
   hasConnectorNamespace,
   normalizeSiteUrl,
@@ -83,6 +84,23 @@ describe('buildMetaBody', () => {
 
   it('wraps an empty map', () => {
     expect(buildMetaBody({})).toEqual({ dbp_wp_meta: {} });
+  });
+});
+
+describe('buildPostBody', () => {
+  it('returns only standard fields when no meta is given', () => {
+    expect(buildPostBody({ title: 'Hi', menuOrder: 2 })).toEqual({ title: 'Hi', menu_order: 2 });
+  });
+
+  it('folds connector meta in under dbp_wp_meta', () => {
+    expect(buildPostBody({ title: 'Hi' }, { price: '10' })).toEqual({
+      title: 'Hi',
+      dbp_wp_meta: { price: '10' },
+    });
+  });
+
+  it('supports a meta-only body', () => {
+    expect(buildPostBody({}, { price: '10' })).toEqual({ dbp_wp_meta: { price: '10' } });
   });
 });
 

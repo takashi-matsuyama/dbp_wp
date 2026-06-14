@@ -91,7 +91,8 @@ export class WpClient {
       ...init,
       headers: {
         Authorization: buildAuthHeader(this.credentials),
-        'Content-Type': 'application/json',
+        // Only declare a JSON body when one is actually sent (GETs carry none).
+        ...(init.body !== undefined ? { 'Content-Type': 'application/json' } : {}),
         ...init.headers,
       },
     });
@@ -123,38 +124,38 @@ export class WpClient {
   }
 
   /**
-   * Update standard post fields (title, menu_order, status). These are core REST
-   * fields and need no companion plugin. Pass the REST route slug as `type`
-   * (e.g. `posts`, `pages`) — not the object type returned on a post.
+   * Update post fields in a single request. Standard fields (title, menu_order,
+   * status) are core REST fields and need no plugin. When `meta` is supplied it rides
+   * the same request through the companion plugin's `dbp_wp_meta` field (ignored by
+   * WordPress without the connector). Pass the REST route slug as `type` (e.g.
+   * `posts`, `pages`) — not the object type returned on a post.
    */
-  async updatePost(id: number, fields: UpdatePostFields, type = 'posts'): Promise<WpPost> {
+  async updatePost(
+    id: number,
+    fields: UpdatePostFields,
+    type = 'posts',
+    meta?: Record<string, unknown>,
+  ): Promise<WpPost> {
     assertPostId(id);
     assertRouteSegment(type);
     const raw = await this.request<WpPostResponse>(`/wp/v2/${type}/${String(id)}?context=edit`, {
       method: 'POST',
-      body: JSON.stringify(buildUpdateBody(fields)),
+      body: JSON.stringify(buildPostBody(fields, meta)),
     });
     return normalizePost(raw);
   }
 
   /**
-   * Update arbitrary post meta through the companion plugin's `dbp_wp_meta` field,
-   * which rides the core `/wp/v2/<type>/<id>` route. Requires the connector to be
-   * installed; without it WordPress ignores the field. The connector writes scalar
-   * values only.
+   * Update only arbitrary post meta through the companion plugin's `dbp_wp_meta`
+   * field. A thin wrapper over {@link WpClient.updatePost} with no standard fields.
+   * Requires the connector; the connector writes scalar values only.
    */
   async updatePostMeta(
     id: number,
     meta: Record<string, unknown>,
     type = 'posts',
   ): Promise<WpPost> {
-    assertPostId(id);
-    assertRouteSegment(type);
-    const raw = await this.request<WpPostResponse>(`/wp/v2/${type}/${String(id)}?context=edit`, {
-      method: 'POST',
-      body: JSON.stringify(buildMetaBody(meta)),
-    });
-    return normalizePost(raw);
+    return this.updatePost(id, {}, type, meta);
   }
 
   /**
@@ -165,11 +166,15 @@ export class WpClient {
   async deletePostMeta(id: number, keys: string[]): Promise<DeleteMetaResult> {
     assertPostId(id);
     const cleanKeys = sanitizeMetaKeys(keys);
-    const raw = await this.request<{ post_id: number; deleted?: string[] }>(
+    const raw = await this.request<{ post_id?: unknown; deleted?: string[] }>(
       `/${CONNECTOR_NAMESPACE}/posts/${String(id)}/meta`,
       { method: 'DELETE', body: JSON.stringify({ keys: cleanKeys }) },
     );
-    return { postId: raw.post_id, deleted: Array.isArray(raw.deleted) ? raw.deleted : [] };
+    // Trust our own request `id` over a malformed connector `post_id`.
+    return {
+      postId: typeof raw.post_id === 'number' ? raw.post_id : id,
+      deleted: Array.isArray(raw.deleted) ? raw.deleted : [],
+    };
   }
 
   /**
@@ -220,6 +225,22 @@ function clampInt(value: number, min: number, max: number): number {
 /** Wrap arbitrary meta in the companion plugin's REST field for a write request. */
 export function buildMetaBody(meta: Record<string, unknown>): Record<string, unknown> {
   return { [META_FIELD]: meta };
+}
+
+/**
+ * Build a post-update body, folding in connector meta under `dbp_wp_meta` when given.
+ * A provided `meta` is included as-is, even when empty — callers that should skip empty
+ * meta (e.g. the CLI batch parser) omit it before calling.
+ */
+export function buildPostBody(
+  fields: UpdatePostFields,
+  meta?: Record<string, unknown>,
+): Record<string, unknown> {
+  const body = buildUpdateBody(fields);
+  if (meta !== undefined) {
+    Object.assign(body, buildMetaBody(meta));
+  }
+  return body;
 }
 
 /** Validate and clean a list of meta keys for deletion (non-empty strings only). */
