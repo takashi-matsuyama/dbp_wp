@@ -3,7 +3,8 @@ import { stat } from 'node:fs/promises';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { extname, join, relative, resolve } from 'node:path';
 import { WpClient, type WpCredentials } from '@dbp-wp/core';
-import { isAllowedHost } from './host';
+import { parseCredentialsInput } from './config';
+import { isAllowedHost, isCrossSiteRequest, isJsonContentType } from './host';
 
 const MIME: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -17,9 +18,15 @@ const MIME: Record<string, string> = {
   '.map': 'application/json; charset=utf-8',
 };
 
-export interface ServerOptions {
-  /** WordPress credentials, or null to run in skeleton mode (empty results). */
+const MAX_BODY_BYTES = 1_000_000;
+
+/** Mutable connection state, held in memory only (never written to disk). */
+export interface ConnectionState {
   credentials: WpCredentials | null;
+}
+
+export interface ServerOptions {
+  state: ConnectionState;
   /** Absolute path to the built UI `dist` directory, or null when not built. */
   uiDir: string | null;
 }
@@ -36,35 +43,141 @@ function sendError(res: ServerResponse, status: number, message: string): void {
   res.end(message);
 }
 
-async function handleApi(
+/** Read and JSON-parse a request body, rejecting bodies over the size limit. */
+async function readJsonBody(req: IncomingMessage): Promise<unknown> {
+  return new Promise((resolvePromise, reject) => {
+    let size = 0;
+    const chunks: Buffer[] = [];
+    req.on('data', (chunk: Buffer) => {
+      size += chunk.length;
+      if (size > MAX_BODY_BYTES) {
+        reject(new Error('Request body too large'));
+        req.destroy();
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on('end', () => {
+      const text = Buffer.concat(chunks).toString('utf-8');
+      if (!text) {
+        resolvePromise({});
+        return;
+      }
+      try {
+        resolvePromise(JSON.parse(text));
+      } catch {
+        reject(new Error('Invalid JSON body'));
+      }
+    });
+    req.on('error', reject);
+  });
+}
+
+async function handlePosts(
   req: IncomingMessage,
   res: ServerResponse,
   url: URL,
   options: ServerOptions,
 ): Promise<void> {
   try {
-    if (req.method === 'GET' && url.pathname === '/api/posts') {
-      if (!options.credentials) {
-        sendJson(res, 200, { posts: [], unconfigured: true });
-        return;
-      }
-      const client = new WpClient(options.credentials);
-      const type = url.searchParams.get('type');
-      const pageRaw = url.searchParams.get('page');
-      const page = pageRaw ? Number.parseInt(pageRaw, 10) : undefined;
-      const posts = await client.listPosts({
-        ...(type ? { type } : {}),
-        ...(page && page > 0 ? { page } : {}),
-      });
-      sendJson(res, 200, { posts, unconfigured: false });
+    if (req.method !== 'GET') {
+      sendJson(res, 405, { error: 'Method not allowed' });
       return;
     }
-    sendJson(res, 404, { error: 'Not found' });
+    const credentials = options.state.credentials;
+    if (!credentials) {
+      sendJson(res, 200, { posts: [], unconfigured: true });
+      return;
+    }
+    const client = new WpClient(credentials);
+    const type = url.searchParams.get('type');
+    const pageRaw = url.searchParams.get('page');
+    const page = pageRaw ? Number.parseInt(pageRaw, 10) : undefined;
+    const posts = await client.listPosts({
+      ...(type ? { type } : {}),
+      ...(page && page > 0 ? { page } : {}),
+    });
+    sendJson(res, 200, { posts, unconfigured: false });
   } catch (e) {
     if (!res.headersSent) {
       sendJson(res, 502, { error: e instanceof Error ? e.message : 'Upstream request failed' });
     }
   }
+}
+
+async function handleConnection(
+  req: IncomingMessage,
+  res: ServerResponse,
+  options: ServerOptions,
+): Promise<void> {
+  if (req.method === 'GET') {
+    const c = options.state.credentials;
+    sendJson(res, 200, { connected: c !== null, siteUrl: c?.siteUrl ?? null });
+    return;
+  }
+
+  if (req.method === 'DELETE') {
+    options.state.credentials = null;
+    sendJson(res, 200, { connected: false, siteUrl: null });
+    return;
+  }
+
+  if (req.method === 'POST') {
+    if (!isJsonContentType(req.headers['content-type'])) {
+      sendJson(res, 415, { error: 'Content-Type must be application/json.' });
+      return;
+    }
+    let body: unknown;
+    try {
+      body = await readJsonBody(req);
+    } catch (e) {
+      sendJson(res, 400, { error: e instanceof Error ? e.message : 'Invalid request body' });
+      return;
+    }
+    const credentials = parseCredentialsInput(body);
+    if (!credentials) {
+      sendJson(res, 400, {
+        error: 'siteUrl, username, and applicationPassword are required.',
+      });
+      return;
+    }
+    let client: WpClient;
+    try {
+      client = new WpClient(credentials);
+    } catch (e) {
+      sendJson(res, 400, { error: e instanceof Error ? e.message : 'Invalid site URL' });
+      return;
+    }
+    try {
+      // Probe the connection so bad credentials fail here, not on first use.
+      await client.listPosts({ perPage: 1 });
+    } catch (e) {
+      sendJson(res, 502, { error: e instanceof Error ? e.message : 'Connection failed' });
+      return;
+    }
+    options.state.credentials = credentials;
+    sendJson(res, 200, { connected: true, siteUrl: credentials.siteUrl });
+    return;
+  }
+
+  sendJson(res, 405, { error: 'Method not allowed' });
+}
+
+async function handleApiRoutes(
+  req: IncomingMessage,
+  res: ServerResponse,
+  url: URL,
+  options: ServerOptions,
+): Promise<void> {
+  if (url.pathname === '/api/connection') {
+    await handleConnection(req, res, options);
+    return;
+  }
+  if (url.pathname === '/api/posts') {
+    await handlePosts(req, res, url, options);
+    return;
+  }
+  sendJson(res, 404, { error: 'Not found' });
 }
 
 /** Resolve a request path to a file inside uiDir, or null if it escapes the root. */
@@ -78,7 +191,6 @@ function resolveSafe(uiDir: string, pathname: string): string | null {
   const candidate = resolve(uiDir, '.' + (decoded === '/' ? '/index.html' : decoded));
   const rel = relative(uiDir, candidate);
   if (rel === '') {
-    // The request resolved to uiDir itself; serve its index.
     return join(uiDir, 'index.html');
   }
   if (rel.startsWith('..') || resolve(uiDir, rel) !== candidate) {
@@ -164,7 +276,14 @@ export function createDbpServer(options: ServerOptions): Server {
 
     const url = new URL(req.url ?? '/', 'http://localhost');
     if (url.pathname === '/api' || url.pathname.startsWith('/api/')) {
-      void handleApi(req, res, url, options).catch(() => sendError(res, 500, 'Internal error'));
+      // Block cross-site browser requests to the API (CSRF / outbound-probe abuse).
+      if (isCrossSiteRequest(req.headers['sec-fetch-site'])) {
+        sendError(res, 403, 'Forbidden');
+        return;
+      }
+      void handleApiRoutes(req, res, url, options).catch(() =>
+        sendError(res, 500, 'Internal error'),
+      );
       return;
     }
     void serveStatic(res, options.uiDir, url.pathname).catch(() =>

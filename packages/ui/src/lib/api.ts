@@ -34,3 +34,50 @@ export async function fetchPosts(query: ListPostsQuery = {}): Promise<PostsRespo
   }
   return (await res.json()) as PostsResponse;
 }
+
+export interface ConnectionStatus {
+  connected: boolean;
+  siteUrl: string | null;
+}
+
+export interface ConnectInput {
+  siteUrl: string;
+  username: string;
+  applicationPassword: string;
+}
+
+/** Read the current connection status from the CLI. */
+export async function getConnection(): Promise<ConnectionStatus> {
+  const res = await fetch('/api/connection');
+  if (!res.ok) {
+    throw new Error(`Failed to read connection status: ${res.status}`);
+  }
+  return (await res.json()) as ConnectionStatus;
+}
+
+/**
+ * Send credentials to the CLI, which holds them in memory and probes the connection.
+ * The browser does not persist the credentials.
+ */
+export async function connect(input: ConnectInput): Promise<ConnectionStatus> {
+  const res = await fetch('/api/connection', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  });
+  const data = (await res.json().catch(() => ({}))) as Partial<ConnectionStatus> & {
+    error?: string;
+  };
+  if (!res.ok) {
+    throw new Error(data.error ?? `Connection failed: ${res.status}`);
+  }
+  return { connected: data.connected ?? true, siteUrl: data.siteUrl ?? input.siteUrl };
+}
+
+/** Clear the CLI's in-memory credentials. */
+export async function disconnect(): Promise<void> {
+  const res = await fetch('/api/connection', { method: 'DELETE' });
+  if (!res.ok) {
+    throw new Error(`Disconnect failed: ${res.status}`);
+  }
+}

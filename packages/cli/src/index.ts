@@ -24,11 +24,12 @@ function resolveUiDir(): string | null {
 }
 
 function main(): void {
-  const credentials = readCredentials();
+  // Credentials live in memory only; the env vars seed an initial connection.
+  const state = { credentials: readCredentials() };
   const port = readPort();
   const uiDir = resolveUiDir();
 
-  const server = createDbpServer({ credentials, uiDir });
+  const server = createDbpServer({ state, uiDir });
   server.on('error', (err: NodeJS.ErrnoException) => {
     if (err.code === 'EADDRINUSE') {
       process.stderr.write(
@@ -44,9 +45,9 @@ function main(): void {
   server.listen(port, '127.0.0.1', () => {
     const url = `http://localhost:${port}/`;
     process.stdout.write(`DBP WP is running at ${url}\n`);
-    if (!credentials) {
+    if (!state.credentials) {
       process.stdout.write(
-        'No WordPress credentials set (DBP_WP_SITE_URL / DBP_WP_USERNAME / DBP_WP_APP_PASSWORD); running in skeleton mode.\n',
+        'No WordPress connection yet; connect from the browser UI (or set DBP_WP_SITE_URL / DBP_WP_USERNAME / DBP_WP_APP_PASSWORD).\n',
       );
     }
     if (!uiDir) {

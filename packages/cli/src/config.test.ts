@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_PORT, readCredentials, readPort } from './config';
+import { DEFAULT_PORT, parseCredentialsInput, readCredentials, readPort } from './config';
 
 describe('readCredentials', () => {
   it('returns null when any field is missing', () => {
@@ -30,5 +30,26 @@ describe('readPort', () => {
 
   it('uses a valid port', () => {
     expect(readPort({ DBP_WP_CLI_PORT: '8080' })).toBe(8080);
+  });
+});
+
+describe('parseCredentialsInput', () => {
+  it('returns null for non-objects or missing fields', () => {
+    expect(parseCredentialsInput(null)).toBeNull();
+    expect(parseCredentialsInput('nope')).toBeNull();
+    expect(parseCredentialsInput({ siteUrl: 'https://x.com', username: 'a' })).toBeNull();
+    expect(
+      parseCredentialsInput({ siteUrl: 'https://x.com', username: 'a', applicationPassword: '  ' }),
+    ).toBeNull();
+  });
+
+  it('returns trimmed credentials when all fields are valid strings', () => {
+    expect(
+      parseCredentialsInput({
+        siteUrl: ' https://x.com ',
+        username: ' editor ',
+        applicationPassword: ' abcd efgh ',
+      }),
+    ).toEqual({ siteUrl: 'https://x.com', username: 'editor', applicationPassword: 'abcd efgh' });
   });
 });

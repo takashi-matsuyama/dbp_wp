@@ -41,8 +41,58 @@ nav button.active {
   font-weight: 600;
 }
 
+header .conn {
+  margin-left: auto;
+  font-size: 0.85rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
 main {
   padding: 1rem;
+}
+
+form.connect {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  max-width: 28rem;
+}
+
+form.connect h2 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+form.connect label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.9rem;
+}
+
+form.connect input {
+  font: inherit;
+  padding: 0.4rem 0.5rem;
+  border: 1px solid color-mix(in srgb, currentColor 30%, transparent);
+  border-radius: 6px;
+  background: transparent;
+}
+
+form.connect button {
+  font: inherit;
+  align-self: flex-start;
+  padding: 0.45rem 1rem;
+  border: 1px solid color-mix(in srgb, currentColor 30%, transparent);
+  border-radius: 6px;
+  background: color-mix(in srgb, currentColor 10%, transparent);
+  cursor: pointer;
+}
+
+form.connect button:disabled {
+  cursor: progress;
+  opacity: 0.6;
 }
 
 table {

@@ -17,6 +17,25 @@ export function readCredentials(env: NodeJS.ProcessEnv = process.env): WpCredent
   return { siteUrl, username, applicationPassword };
 }
 
+/**
+ * Parse credentials submitted over the API. Returns null unless all three fields are
+ * present non-empty strings. Input is untrusted, so the shape is validated explicitly.
+ */
+export function parseCredentialsInput(body: unknown): WpCredentials | null {
+  if (typeof body !== 'object' || body === null) {
+    return null;
+  }
+  const fields = body as Record<string, unknown>;
+  const siteUrl = typeof fields.siteUrl === 'string' ? fields.siteUrl.trim() : '';
+  const username = typeof fields.username === 'string' ? fields.username.trim() : '';
+  const applicationPassword =
+    typeof fields.applicationPassword === 'string' ? fields.applicationPassword.trim() : '';
+  if (!siteUrl || !username || !applicationPassword) {
+    return null;
+  }
+  return { siteUrl, username, applicationPassword };
+}
+
 /** Resolve the server port from the environment, falling back to {@link DEFAULT_PORT}. */
 export function readPort(env: NodeJS.ProcessEnv = process.env): number {
   const raw = env.DBP_WP_CLI_PORT;

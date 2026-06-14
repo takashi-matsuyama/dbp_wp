@@ -16,3 +16,20 @@ export function isAllowedHost(hostHeader: string | undefined): boolean {
   }
   return ALLOWED_HOSTS.has(hostname);
 }
+
+/**
+ * True when the browser reports this as a cross-site request. Blocks a malicious page
+ * from driving the local API (CSRF). Non-browser clients (curl, tests) omit the header
+ * and are allowed.
+ */
+export function isCrossSiteRequest(secFetchSite: string | string[] | undefined): boolean {
+  return secFetchSite === 'cross-site';
+}
+
+/** True when the Content-Type declares a JSON body. */
+export function isJsonContentType(contentType: string | undefined): boolean {
+  if (typeof contentType !== 'string') {
+    return false;
+  }
+  return contentType.split(';')[0]?.trim().toLowerCase() === 'application/json';
+}
