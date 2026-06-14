@@ -81,3 +81,30 @@ export async function disconnect(): Promise<void> {
     throw new Error(`Disconnect failed: ${res.status}`);
   }
 }
+
+export interface PostUpdate {
+  id: number;
+  title?: string;
+  menuOrder?: number;
+  status?: string;
+}
+
+export interface UpdateResult {
+  id: number;
+  ok: boolean;
+  error?: string;
+}
+
+/** Send a batch of post edits to the CLI, which applies them over the WordPress REST API. */
+export async function savePosts(updates: PostUpdate[]): Promise<UpdateResult[]> {
+  const res = await fetch('/api/posts/batch', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ updates }),
+  });
+  const data = (await res.json().catch(() => ({}))) as { results?: UpdateResult[]; error?: string };
+  if (!res.ok) {
+    throw new Error(data.error ?? `Save failed: ${res.status}`);
+  }
+  return data.results ?? [];
+}

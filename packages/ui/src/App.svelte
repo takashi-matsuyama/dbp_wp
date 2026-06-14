@@ -79,6 +79,6 @@
   {:else if tab === 'table'}
     <TableView {posts} />
   {:else}
-    <SpreadsheetView {posts} />
+    <SpreadsheetView {posts} onsaved={refresh} />
   {/if}
 </main>

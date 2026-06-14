@@ -1,4 +1,10 @@
-import type { ListPostsParams, WpCredentials, WpPost, WpPostResponse } from './types';
+import type {
+  ListPostsParams,
+  UpdatePostFields,
+  WpCredentials,
+  WpPost,
+  WpPostResponse,
+} from './types';
 
 /** Hosts for which plain http is tolerated (local development). */
 const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]', '::1']);
@@ -110,6 +116,21 @@ export class WpClient {
   }
 
   /**
+   * Update standard post fields (title, menu_order, status). These are core REST
+   * fields and need no companion plugin. Pass the REST route slug as `type`
+   * (e.g. `posts`, `pages`) — not the object type returned on a post.
+   */
+  async updatePost(id: number, fields: UpdatePostFields, type = 'posts'): Promise<WpPost> {
+    assertPostId(id);
+    assertRouteSegment(type);
+    const raw = await this.request<WpPostResponse>(`/wp/v2/${type}/${String(id)}?context=edit`, {
+      method: 'POST',
+      body: JSON.stringify(buildUpdateBody(fields)),
+    });
+    return normalizePost(raw);
+  }
+
+  /**
    * Update post meta. Editing arbitrary meta keys requires the companion plugin;
    * WordPress core only exposes meta registered with `show_in_rest`.
    */
@@ -126,6 +147,21 @@ export class WpClient {
     });
     return normalizePost(raw);
   }
+}
+
+/** Map editable fields to the WordPress REST request body (camelCase → snake_case). */
+export function buildUpdateBody(fields: UpdatePostFields): Record<string, unknown> {
+  const body: Record<string, unknown> = {};
+  if (fields.title !== undefined) {
+    body.title = fields.title;
+  }
+  if (fields.menuOrder !== undefined) {
+    body.menu_order = fields.menuOrder;
+  }
+  if (fields.status !== undefined) {
+    body.status = fields.status;
+  }
+  return body;
 }
 
 function assertRouteSegment(segment: string): void {

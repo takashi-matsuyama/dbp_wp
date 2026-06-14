@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildAuthHeader, normalizeSiteUrl } from './wp-client';
+import { buildAuthHeader, buildUpdateBody, normalizeSiteUrl } from './wp-client';
 
 describe('buildAuthHeader', () => {
   it('builds an HTTP Basic header from Application Password credentials', () => {
@@ -49,5 +49,20 @@ describe('normalizeSiteUrl', () => {
     expect(() => normalizeSiteUrl('https://user:pw@example.com')).toThrow();
     expect(() => normalizeSiteUrl('https://example.com/?a=1')).toThrow();
     expect(() => normalizeSiteUrl('https://example.com/#x')).toThrow();
+  });
+});
+
+describe('buildUpdateBody', () => {
+  it('maps camelCase fields to WordPress REST keys', () => {
+    expect(buildUpdateBody({ title: 'Hi', menuOrder: 4, status: 'draft' })).toEqual({
+      title: 'Hi',
+      menu_order: 4,
+      status: 'draft',
+    });
+  });
+
+  it('omits fields that are not provided', () => {
+    expect(buildUpdateBody({ menuOrder: 0 })).toEqual({ menu_order: 0 });
+    expect(buildUpdateBody({})).toEqual({});
   });
 });

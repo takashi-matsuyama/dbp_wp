@@ -43,6 +43,19 @@ export interface WpPost {
   meta: Record<string, unknown>;
 }
 
+/**
+ * Editable standard post fields. These map to core WordPress REST fields and need no
+ * companion plugin. Arbitrary meta editing is handled separately (companion plugin).
+ */
+export interface UpdatePostFields {
+  /** Editable title (sent as the post `title`). */
+  title?: string;
+  /** Ordering value (sent as `menu_order`). */
+  menuOrder?: number;
+  /** Post status (e.g. `publish`, `draft`). */
+  status?: string;
+}
+
 /** Parameters for listing posts. */
 export interface ListPostsParams {
   /** REST post type slug (e.g. `posts`, `pages`). Defaults to `posts`. */

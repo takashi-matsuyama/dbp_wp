@@ -5,6 +5,7 @@ import { extname, join, relative, resolve } from 'node:path';
 import { WpClient, type WpCredentials } from '@dbp-wp/core';
 import { parseCredentialsInput } from './config';
 import { isAllowedHost, isCrossSiteRequest, isJsonContentType } from './host';
+import { parseBatchUpdates } from './updates';
 
 const MIME: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -105,6 +106,54 @@ async function handlePosts(
   }
 }
 
+async function handlePostsBatch(
+  req: IncomingMessage,
+  res: ServerResponse,
+  options: ServerOptions,
+): Promise<void> {
+  if (req.method !== 'POST') {
+    sendJson(res, 405, { error: 'Method not allowed' });
+    return;
+  }
+  if (!isJsonContentType(req.headers['content-type'])) {
+    sendJson(res, 415, { error: 'Content-Type must be application/json.' });
+    return;
+  }
+  const credentials = options.state.credentials;
+  if (!credentials) {
+    sendJson(res, 409, { error: 'Not connected' });
+    return;
+  }
+
+  let body: unknown;
+  try {
+    body = await readJsonBody(req);
+  } catch (e) {
+    sendJson(res, 400, { error: e instanceof Error ? e.message : 'Invalid request body' });
+    return;
+  }
+  const updates = parseBatchUpdates(body);
+  if (!updates) {
+    sendJson(res, 400, { error: 'Invalid updates payload.' });
+    return;
+  }
+
+  // Apply sequentially; report success/failure per row rather than failing the batch.
+  // The UI currently lists only the default `posts` route, so updates target it too;
+  // when post-type selection is added, the route slug must be threaded through here.
+  const client = new WpClient(credentials);
+  const results: Array<{ id: number; ok: boolean; error?: string }> = [];
+  for (const update of updates) {
+    try {
+      await client.updatePost(update.id, update.fields);
+      results.push({ id: update.id, ok: true });
+    } catch (e) {
+      results.push({ id: update.id, ok: false, error: e instanceof Error ? e.message : 'Update failed' });
+    }
+  }
+  sendJson(res, 200, { results });
+}
+
 async function handleConnection(
   req: IncomingMessage,
   res: ServerResponse,
@@ -171,6 +220,10 @@ async function handleApiRoutes(
 ): Promise<void> {
   if (url.pathname === '/api/connection') {
     await handleConnection(req, res, options);
+    return;
+  }
+  if (url.pathname === '/api/posts/batch') {
+    await handlePostsBatch(req, res, options);
     return;
   }
   if (url.pathname === '/api/posts') {

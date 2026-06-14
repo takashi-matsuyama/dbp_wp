@@ -119,6 +119,35 @@ th.sortable {
   box-sizing: border-box;
 }
 
+.sheet-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
+}
+
+.sheet-toolbar button {
+  font: inherit;
+  padding: 0.4rem 0.9rem;
+  border: 1px solid color-mix(in srgb, currentColor 30%, transparent);
+  border-radius: 6px;
+  background: color-mix(in srgb, currentColor 10%, transparent);
+  cursor: pointer;
+}
+
+.sheet-toolbar button:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.sheet tr.changed td {
+  background: color-mix(in srgb, #f1c40f 18%, transparent);
+}
+
+.row-status .error {
+  font-size: 0.8rem;
+}
+
 .notice {
   color: color-mix(in srgb, currentColor 70%, transparent);
   font-size: 0.9rem;
