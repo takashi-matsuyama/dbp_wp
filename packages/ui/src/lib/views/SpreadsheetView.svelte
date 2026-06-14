@@ -1,8 +1,12 @@
 <script lang="ts">
   import type { WpPost } from '@dbp-wp/core';
   import { savePosts, type PostUpdate } from '../api';
+  import { computeMenuOrders } from '../formula';
 
   let { posts, onsaved }: { posts: WpPost[]; onsaved: () => void | Promise<void> } = $props();
+
+  let formula = $state('');
+  let formulaError = $state<string | null>(null);
 
   interface Draft {
     title: string;
@@ -39,6 +43,24 @@
   }
 
   const changed = $derived(posts.filter(isChanged));
+
+  // Apply a formula to every row's menu_order draft (context: index, id, menuOrder).
+  function applyFormula(): void {
+    formulaError = null;
+    try {
+      const values = computeMenuOrders(posts, formula);
+      const next = { ...drafts };
+      for (const post of posts) {
+        const value = values.get(post.id);
+        if (value !== undefined) {
+          next[post.id] = { ...draftFor(post), menuOrder: value };
+        }
+      }
+      drafts = next;
+    } catch (e) {
+      formulaError = e instanceof Error ? e.message : String(e);
+    }
+  }
 
   function buildUpdates(): PostUpdate[] {
     return changed.map((post) => {
@@ -95,6 +117,19 @@
       {saving ? 'Saving…' : `Save ${changed.length} change${changed.length === 1 ? '' : 's'}`}
     </button>
     {#if error}<span class="error">{error}</span>{/if}
+  </div>
+  <div class="formula-bar">
+    <label>
+      menu_order =
+      <input
+        bind:value={formula}
+        placeholder="e.g. index * 10"
+        onkeydown={(e) => e.key === 'Enter' && applyFormula()}
+      />
+    </label>
+    <button onclick={applyFormula} disabled={formula.trim() === ''}>Apply to all rows</button>
+    <span class="hint">cells: index, id, menuOrder</span>
+    {#if formulaError}<span class="error">{formulaError}</span>{/if}
   </div>
   <table class="sheet">
     <thead>

@@ -140,6 +140,50 @@ th.sortable {
   opacity: 0.5;
 }
 
+.formula-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-bottom: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.formula-bar label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-family: ui-monospace, monospace;
+  font-size: 0.85rem;
+}
+
+.formula-bar input {
+  font: inherit;
+  padding: 0.25rem 0.4rem;
+  min-width: 12rem;
+  border: 1px solid color-mix(in srgb, currentColor 30%, transparent);
+  border-radius: 6px;
+  background: transparent;
+}
+
+.formula-bar button {
+  font: inherit;
+  padding: 0.3rem 0.7rem;
+  border: 1px solid color-mix(in srgb, currentColor 30%, transparent);
+  border-radius: 6px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.formula-bar button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.formula-bar .hint {
+  font-size: 0.78rem;
+  color: color-mix(in srgb, currentColor 60%, transparent);
+}
+
 .sheet tr.changed td {
   background: color-mix(in srgb, #f1c40f 18%, transparent);
 }
