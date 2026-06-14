@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { buildAuthHeader, buildUpdateBody, normalizeSiteUrl } from './wp-client';
+import {
+  buildAuthHeader,
+  buildMetaBody,
+  buildUpdateBody,
+  hasConnectorNamespace,
+  normalizeSiteUrl,
+  sanitizeMetaKeys,
+} from './wp-client';
 
 describe('buildAuthHeader', () => {
   it('builds an HTTP Basic header from Application Password credentials', () => {
@@ -64,5 +71,47 @@ describe('buildUpdateBody', () => {
   it('omits fields that are not provided', () => {
     expect(buildUpdateBody({ menuOrder: 0 })).toEqual({ menu_order: 0 });
     expect(buildUpdateBody({})).toEqual({});
+  });
+});
+
+describe('buildMetaBody', () => {
+  it('wraps arbitrary meta in the companion plugin field', () => {
+    expect(buildMetaBody({ price: '10', _rel: '5' })).toEqual({
+      dbp_wp_meta: { price: '10', _rel: '5' },
+    });
+  });
+
+  it('wraps an empty map', () => {
+    expect(buildMetaBody({})).toEqual({ dbp_wp_meta: {} });
+  });
+});
+
+describe('sanitizeMetaKeys', () => {
+  it('keeps non-empty string keys', () => {
+    expect(sanitizeMetaKeys(['price', '_rel'])).toEqual(['price', '_rel']);
+  });
+
+  it('drops empty and non-string entries', () => {
+    expect(sanitizeMetaKeys(['a', '', 1, null, 'b'])).toEqual(['a', 'b']);
+  });
+
+  it('throws when not an array', () => {
+    expect(() => sanitizeMetaKeys('price')).toThrow();
+  });
+
+  it('throws when no usable keys remain', () => {
+    expect(() => sanitizeMetaKeys(['', 2])).toThrow();
+  });
+});
+
+describe('hasConnectorNamespace', () => {
+  it('detects the connector namespace in the REST index', () => {
+    expect(hasConnectorNamespace(['wp/v2', 'dbp-wp/v1'])).toBe(true);
+  });
+
+  it('returns false when absent or malformed', () => {
+    expect(hasConnectorNamespace(['wp/v2'])).toBe(false);
+    expect(hasConnectorNamespace(undefined)).toBe(false);
+    expect(hasConnectorNamespace('dbp-wp/v1')).toBe(false);
   });
 });

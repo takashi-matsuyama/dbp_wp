@@ -1,4 +1,5 @@
 import type {
+  DeleteMetaResult,
   ListPostsParams,
   UpdatePostFields,
   WpCredentials,
@@ -11,6 +12,12 @@ const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]', '::1']);
 
 /** Allowed characters for a REST route segment (post type slug). */
 const ROUTE_SEGMENT = /^[a-z0-9._-]+$/i;
+
+/** REST field added by the companion plugin to carry arbitrary post meta. */
+const META_FIELD = 'dbp_wp_meta';
+
+/** REST namespace registered by the companion plugin. */
+const CONNECTOR_NAMESPACE = 'dbp-wp/v1';
 
 /**
  * Validate and normalize a WordPress site URL into a REST base (origin + base path).
@@ -131,8 +138,10 @@ export class WpClient {
   }
 
   /**
-   * Update post meta. Editing arbitrary meta keys requires the companion plugin;
-   * WordPress core only exposes meta registered with `show_in_rest`.
+   * Update arbitrary post meta through the companion plugin's `dbp_wp_meta` field,
+   * which rides the core `/wp/v2/<type>/<id>` route. Requires the connector to be
+   * installed; without it WordPress ignores the field. The connector writes scalar
+   * values only.
    */
   async updatePostMeta(
     id: number,
@@ -143,9 +152,34 @@ export class WpClient {
     assertRouteSegment(type);
     const raw = await this.request<WpPostResponse>(`/wp/v2/${type}/${String(id)}?context=edit`, {
       method: 'POST',
-      body: JSON.stringify({ meta }),
+      body: JSON.stringify(buildMetaBody(meta)),
     });
     return normalizePost(raw);
+  }
+
+  /**
+   * Delete named meta keys from a single post via the companion plugin's
+   * `DELETE /dbp-wp/v1/posts/<id>/meta` route. This route is keyed by id only (the
+   * post type is irrelevant). Requires the connector.
+   */
+  async deletePostMeta(id: number, keys: string[]): Promise<DeleteMetaResult> {
+    assertPostId(id);
+    const cleanKeys = sanitizeMetaKeys(keys);
+    const raw = await this.request<{ post_id: number; deleted?: string[] }>(
+      `/${CONNECTOR_NAMESPACE}/posts/${String(id)}/meta`,
+      { method: 'DELETE', body: JSON.stringify({ keys: cleanKeys }) },
+    );
+    return { postId: raw.post_id, deleted: Array.isArray(raw.deleted) ? raw.deleted : [] };
+  }
+
+  /**
+   * Detect whether the companion plugin is active by checking the REST index
+   * (`/wp-json/`) for the connector's namespace. Throws on a failed request; a caller
+   * that wants a non-fatal probe should treat a thrown error as "not available".
+   */
+  async detectConnector(): Promise<boolean> {
+    const index = await this.request<{ namespaces?: unknown }>('/');
+    return hasConnectorNamespace(index.namespaces);
   }
 }
 
@@ -183,8 +217,30 @@ function clampInt(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, Math.trunc(value)));
 }
 
+/** Wrap arbitrary meta in the companion plugin's REST field for a write request. */
+export function buildMetaBody(meta: Record<string, unknown>): Record<string, unknown> {
+  return { [META_FIELD]: meta };
+}
+
+/** Validate and clean a list of meta keys for deletion (non-empty strings only). */
+export function sanitizeMetaKeys(keys: unknown): string[] {
+  if (!Array.isArray(keys)) {
+    throw new Error('Meta keys must be an array of strings.');
+  }
+  const clean = keys.filter((key): key is string => typeof key === 'string' && key.length > 0);
+  if (clean.length === 0) {
+    throw new Error('At least one non-empty meta key is required.');
+  }
+  return clean;
+}
+
+/** True when a REST index `namespaces` list includes the connector namespace. */
+export function hasConnectorNamespace(namespaces: unknown): boolean {
+  return Array.isArray(namespaces) && namespaces.includes(CONNECTOR_NAMESPACE);
+}
+
 function normalizePost(raw: WpPostResponse): WpPost {
-  return {
+  const post: WpPost = {
     id: raw.id,
     type: raw.type,
     status: raw.status,
@@ -192,4 +248,8 @@ function normalizePost(raw: WpPostResponse): WpPost {
     menuOrder: raw.menu_order,
     meta: raw.meta,
   };
+  if (raw.dbp_wp_meta !== undefined) {
+    post.dbpWpMeta = raw.dbp_wp_meta;
+  }
+  return post;
 }

@@ -26,6 +26,11 @@ export interface WpPostResponse {
   title: { rendered: string; raw?: string };
   menu_order: number;
   meta: Record<string, unknown>;
+  /**
+   * Arbitrary post meta exposed by the companion plugin's `dbp_wp_meta` field.
+   * Present only when the connector is active; absent in restricted mode.
+   */
+  dbp_wp_meta?: Record<string, unknown>;
 }
 
 /** Normalized, internal post model used by DBP WP. */
@@ -37,10 +42,16 @@ export interface WpPost {
   title: string;
   menuOrder: number;
   /**
-   * Post meta. Arbitrary-key meta editing requires the companion plugin; core REST only
-   * exposes meta registered with `show_in_rest`.
+   * Core REST post meta (only keys registered with `show_in_rest`). For arbitrary
+   * meta exposed by the companion plugin, see {@link WpPost.dbpWpMeta}.
    */
   meta: Record<string, unknown>;
+  /**
+   * Arbitrary post meta from the companion plugin (all keys, single value each).
+   * Present only when the connector returned `dbp_wp_meta`; `undefined` in restricted
+   * mode (no connector installed).
+   */
+  dbpWpMeta?: Record<string, unknown>;
 }
 
 /**
@@ -54,6 +65,14 @@ export interface UpdatePostFields {
   menuOrder?: number;
   /** Post status (e.g. `publish`, `draft`). */
   status?: string;
+}
+
+/** Result of a per-post meta delete via the companion plugin. */
+export interface DeleteMetaResult {
+  /** The post the keys were deleted from. */
+  postId: number;
+  /** Keys actually deleted (a key not present on the post is omitted). */
+  deleted: string[];
 }
 
 /** Parameters for listing posts. */
