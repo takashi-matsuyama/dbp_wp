@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { WpPost } from '@dbp-wp/core';
-  import { savePosts, type PostUpdate } from '../api';
+  import { bulkDeleteMeta, savePosts, type PostUpdate } from '../api';
   import { computeMenuOrders } from '../formula';
 
   let {
@@ -30,6 +30,9 @@
   let saving = $state(false);
   let error = $state<string | null>(null);
   let rowErrors = $state<Record<number, string>>({});
+  // Bulk meta-delete: the column key awaiting inline confirmation, and in-flight flag.
+  let deletingKey = $state<string | null>(null);
+  let deleteBusy = $state(false);
 
   function draftFor(post: WpPost): Draft {
     return drafts[post.id] ?? { title: post.title, menuOrder: post.menuOrder };
@@ -109,6 +112,54 @@
       next[Number(id)] = rest;
     }
     metaDrafts = next;
+  }
+
+  // Loaded posts that actually carry this meta key (so deletion has something to do).
+  function rowsWithKey(key: string): WpPost[] {
+    return posts.filter(
+      (post) =>
+        post.dbpWpMeta !== undefined &&
+        Object.prototype.hasOwnProperty.call(post.dbpWpMeta, key),
+    );
+  }
+
+  function requestDelete(key: string): void {
+    deletingKey = key;
+  }
+
+  function cancelDelete(): void {
+    deletingKey = null;
+  }
+
+  // Delete a meta key from every loaded row that has it (one bulk request).
+  async function confirmDelete(key: string): Promise<void> {
+    if (deleteBusy || saving) {
+      return; // guard against re-entrant triggers
+    }
+    const targets = rowsWithKey(key);
+    if (targets.length === 0) {
+      removeColumn(key);
+      deletingKey = null;
+      return;
+    }
+    deleteBusy = true;
+    error = null;
+    try {
+      const results = await bulkDeleteMeta(targets.map((post) => ({ id: post.id, keys: [key] })));
+      const failed = results.filter((result) => !result.ok);
+      if (failed.length > 0) {
+        // Keep the column so its still-present values stay visible next to the error.
+        error = `Delete failed for ${failed.length} of ${results.length} row(s).`;
+      } else {
+        removeColumn(key);
+      }
+      deletingKey = null;
+      await onsaved();
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
+    } finally {
+      deleteBusy = false;
+    }
   }
 
   function isChanged(post: WpPost): boolean {
@@ -204,7 +255,7 @@
   <p class="empty">No rows yet.</p>
 {:else}
   <div class="sheet-toolbar">
-    <button onclick={save} disabled={saving || changed.length === 0}>
+    <button onclick={save} disabled={saving || deleteBusy || changed.length === 0}>
       {saving ? 'Saving…' : `Save ${changed.length} change${changed.length === 1 ? '' : 's'}`}
     </button>
     {#if error}<span class="error">{error}</span>{/if}
@@ -260,12 +311,28 @@
         {#each metaColumns as key (key)}
           <th class="meta-col">
             <span class="meta-key">{key}</span>
-            <button
-              class="col-remove"
-              title="Hide this column"
-              onclick={() => removeColumn(key)}
-              disabled={saving}>×</button
-            >
+            {#if deletingKey === key}
+              <span class="confirm">
+                Delete “{key}” from {rowsWithKey(key).length} row(s)?
+                <button onclick={() => confirmDelete(key)} disabled={deleteBusy}>
+                  {deleteBusy ? 'Deleting…' : 'Delete'}
+                </button>
+                <button onclick={cancelDelete} disabled={deleteBusy}>Cancel</button>
+              </span>
+            {:else}
+              <button
+                class="col-action"
+                title="Hide this column (keeps the data)"
+                onclick={() => removeColumn(key)}
+                disabled={saving || deleteBusy}>×</button
+              >
+              <button
+                class="col-action danger"
+                title="Delete this field from all rows"
+                onclick={() => requestDelete(key)}
+                disabled={saving || deleteBusy}>🗑</button
+              >
+            {/if}
           </th>
         {/each}
         <th></th>
@@ -323,11 +390,19 @@
   .meta-col {
     white-space: nowrap;
   }
-  .col-remove {
+  .col-action {
     margin-left: 0.25rem;
     padding: 0 0.35rem;
     line-height: 1;
     cursor: pointer;
+  }
+  .col-action.danger {
+    color: #b00020;
+  }
+  .confirm {
+    margin-left: 0.5rem;
+    font-weight: normal;
+    font-size: 0.85rem;
   }
   .changed-cell input {
     background: rgba(255, 215, 0, 0.18);

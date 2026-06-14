@@ -5,7 +5,7 @@ import { extname, join, relative, resolve } from 'node:path';
 import { WpClient, WpRequestError, type WpCredentials } from '@dbp-wp/core';
 import { parseCredentialsInput } from './config';
 import { isAllowedHost, isCrossSiteRequest, isJsonContentType } from './host';
-import { parseBatchUpdates, parseMetaDelete } from './updates';
+import { parseBatchUpdates, parseBulkMetaDelete, parseMetaDelete } from './updates';
 
 const MIME: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -210,6 +210,58 @@ async function handleMetaDelete(
   }
 }
 
+async function handleBulkMetaDelete(
+  req: IncomingMessage,
+  res: ServerResponse,
+  options: ServerOptions,
+): Promise<void> {
+  if (req.method !== 'DELETE') {
+    sendJson(res, 405, { error: 'Method not allowed' });
+    return;
+  }
+  if (!isJsonContentType(req.headers['content-type'])) {
+    sendJson(res, 415, { error: 'Content-Type must be application/json.' });
+    return;
+  }
+  const credentials = options.state.credentials;
+  if (!credentials) {
+    sendJson(res, 409, { error: 'Not connected' });
+    return;
+  }
+
+  let body: unknown;
+  try {
+    body = await readJsonBody(req);
+  } catch (e) {
+    sendJson(res, 400, { error: e instanceof Error ? e.message : 'Invalid request body' });
+    return;
+  }
+  const deletes = parseBulkMetaDelete(body);
+  if (!deletes) {
+    sendJson(res, 400, { error: 'Invalid bulk meta-delete payload.' });
+    return;
+  }
+
+  // Apply sequentially; report success/failure per post rather than failing the batch.
+  const client = new WpClient(credentials);
+  const results: Array<{ id: number; ok: boolean; error?: string }> = [];
+  for (const del of deletes) {
+    try {
+      await client.deletePostMeta(del.id, del.keys);
+      results.push({ id: del.id, ok: true });
+    } catch (e) {
+      const error =
+        e instanceof WpRequestError && e.status === 404
+          ? 'Companion plugin not found.'
+          : e instanceof Error
+            ? e.message
+            : 'Delete failed';
+      results.push({ id: del.id, ok: false, error });
+    }
+  }
+  sendJson(res, 200, { results });
+}
+
 async function handleConnection(
   req: IncomingMessage,
   res: ServerResponse,
@@ -306,6 +358,10 @@ async function handleApiRoutes(
   }
   if (url.pathname === '/api/posts/batch') {
     await handlePostsBatch(req, res, options);
+    return;
+  }
+  if (url.pathname === '/api/posts/meta/bulk') {
+    await handleBulkMetaDelete(req, res, options);
     return;
   }
   if (url.pathname === '/api/posts/meta') {

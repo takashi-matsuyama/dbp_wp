@@ -121,3 +121,23 @@ export async function savePosts(updates: PostUpdate[]): Promise<UpdateResult[]> 
   }
   return data.results ?? [];
 }
+
+/** A per-post meta deletion (delete the named keys from one post). */
+export interface MetaDeletion {
+  id: number;
+  keys: string[];
+}
+
+/** Delete meta keys from many posts in one request (companion plugin required). */
+export async function bulkDeleteMeta(deletes: MetaDeletion[]): Promise<UpdateResult[]> {
+  const res = await fetch('/api/posts/meta/bulk', {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ deletes }),
+  });
+  const data = (await res.json().catch(() => ({}))) as { results?: UpdateResult[]; error?: string };
+  if (!res.ok) {
+    throw new Error(data.error ?? `Bulk delete failed: ${res.status}`);
+  }
+  return data.results ?? [];
+}

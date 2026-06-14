@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseBatchUpdates, parseMetaDelete } from './updates';
+import { parseBatchUpdates, parseBulkMetaDelete, parseMetaDelete } from './updates';
 
 describe('parseBatchUpdates', () => {
   it('parses valid updates with editable fields', () => {
@@ -96,5 +96,28 @@ describe('parseMetaDelete', () => {
     expect(parseMetaDelete({ id: 7, keys: [1, ''] })).toBeNull();
     expect(parseMetaDelete({ id: 7 })).toBeNull();
     expect(parseMetaDelete(null)).toBeNull();
+  });
+});
+
+describe('parseBulkMetaDelete', () => {
+  it('parses a list of per-post deletions', () => {
+    expect(
+      parseBulkMetaDelete({
+        deletes: [
+          { id: 1, keys: ['price'] },
+          { id: 2, keys: ['price', 'sku'] },
+        ],
+      }),
+    ).toEqual([
+      { id: 1, keys: ['price'] },
+      { id: 2, keys: ['price', 'sku'] },
+    ]);
+  });
+
+  it('rejects an empty list, a non-array, or any malformed item', () => {
+    expect(parseBulkMetaDelete({ deletes: [] })).toBeNull();
+    expect(parseBulkMetaDelete({ deletes: 'x' })).toBeNull();
+    expect(parseBulkMetaDelete({ deletes: [{ id: 1, keys: ['price'] }, { id: 0, keys: ['x'] }] })).toBeNull();
+    expect(parseBulkMetaDelete(null)).toBeNull();
   });
 });

@@ -142,3 +142,27 @@ export function parseMetaDelete(body: unknown): MetaDelete | null {
   }
   return { id: record.id, keys };
 }
+
+/**
+ * Validate a bulk meta-delete payload: `{ deletes: [{ id, keys }] }`. Returns null on an
+ * empty/oversized list or any malformed item (each item is validated like a single
+ * {@link parseMetaDelete}).
+ */
+export function parseBulkMetaDelete(body: unknown): MetaDelete[] | null {
+  if (typeof body !== 'object' || body === null) {
+    return null;
+  }
+  const deletes = (body as Record<string, unknown>).deletes;
+  if (!Array.isArray(deletes) || deletes.length === 0 || deletes.length > MAX_UPDATES) {
+    return null;
+  }
+  const result: MetaDelete[] = [];
+  for (const item of deletes) {
+    const parsed = parseMetaDelete(item);
+    if (!parsed) {
+      return null;
+    }
+    result.push(parsed);
+  }
+  return result;
+}
