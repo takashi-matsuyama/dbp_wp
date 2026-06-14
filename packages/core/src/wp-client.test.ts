@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildAuthHeader } from './wp-client';
+import { buildAuthHeader, normalizeSiteUrl } from './wp-client';
 
 describe('buildAuthHeader', () => {
   it('builds an HTTP Basic header from Application Password credentials', () => {
@@ -22,5 +22,32 @@ describe('buildAuthHeader', () => {
 
     const expected = Buffer.from('café:pw', 'utf-8').toString('base64');
     expect(header).toBe(`Basic ${expected}`);
+  });
+
+  it('rejects usernames containing a colon', () => {
+    expect(() =>
+      buildAuthHeader({ siteUrl: 'https://example.com', username: 'a:b', applicationPassword: 'pw' }),
+    ).toThrow();
+  });
+});
+
+describe('normalizeSiteUrl', () => {
+  it('accepts https and strips trailing slashes', () => {
+    expect(normalizeSiteUrl('https://example.com/')).toBe('https://example.com');
+  });
+
+  it('preserves a subdirectory base path', () => {
+    expect(normalizeSiteUrl('https://example.com/blog/')).toBe('https://example.com/blog');
+  });
+
+  it('allows http only for local hosts', () => {
+    expect(normalizeSiteUrl('http://localhost:8080')).toBe('http://localhost:8080');
+    expect(() => normalizeSiteUrl('http://example.com')).toThrow();
+  });
+
+  it('rejects embedded credentials, query strings, and fragments', () => {
+    expect(() => normalizeSiteUrl('https://user:pw@example.com')).toThrow();
+    expect(() => normalizeSiteUrl('https://example.com/?a=1')).toThrow();
+    expect(() => normalizeSiteUrl('https://example.com/#x')).toThrow();
   });
 });

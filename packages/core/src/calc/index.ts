@@ -1,10 +1,10 @@
 /**
  * Formula engine (contract only — implementation deferred).
  *
- * The legacy SaaS evaluated spreadsheet formulas with `eval`, which is unsafe. The
- * replacement MUST use a sandboxed expression evaluator. The concrete library is chosen
- * in a later implementation step (see planning docs, framework-selection "remaining
- * points"); this module only fixes the interface so the rest of the app can depend on it.
+ * A previous implementation evaluated spreadsheet formulas with `eval`, which is unsafe.
+ * The replacement MUST use a sandboxed expression evaluator; the concrete library is
+ * selected in a later implementation step. This module only fixes the interface so the
+ * rest of the app can depend on it.
  */
 export interface FormulaEngine {
   /**

@@ -13,14 +13,33 @@ export interface WpCredentials {
   applicationPassword: string;
 }
 
-/** A WordPress post, narrowed to the fields DBP WP edits. */
+/**
+ * Raw post shape as returned by the WordPress REST API (`/wp/v2/<type>`).
+ *
+ * `title` is an object; `raw` is only present in `context=edit`. `menu_order` is
+ * snake_case. Use {@link WpPost} for the normalized internal model.
+ */
+export interface WpPostResponse {
+  id: number;
+  type: string;
+  status: string;
+  title: { rendered: string; raw?: string };
+  menu_order: number;
+  meta: Record<string, unknown>;
+}
+
+/** Normalized, internal post model used by DBP WP. */
 export interface WpPost {
   id: number;
   type: string;
   status: string;
+  /** Editable title (the `raw` value when available, else `rendered`). */
   title: string;
   menuOrder: number;
-  /** Post meta. Arbitrary-key editing requires the companion plugin (see planning Q2). */
+  /**
+   * Post meta. Arbitrary-key meta editing requires the companion plugin; core REST only
+   * exposes meta registered with `show_in_rest`.
+   */
   meta: Record<string, unknown>;
 }
 
