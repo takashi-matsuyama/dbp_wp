@@ -57,6 +57,11 @@ td {
   border-bottom: 1px solid color-mix(in srgb, currentColor 15%, transparent);
 }
 
+th.sortable {
+  cursor: pointer;
+  user-select: none;
+}
+
 .sheet input {
   width: 100%;
   font: inherit;

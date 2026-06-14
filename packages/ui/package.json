@@ -17,6 +17,9 @@
     "preview": "vite preview",
     "typecheck": "svelte-check --tsconfig ./tsconfig.json"
   },
+  "dependencies": {
+    "@tanstack/table-core": "^8.20.5"
+  },
   "devDependencies": {
     "@dbp-wp/core": "*",
     "@sveltejs/vite-plugin-svelte": "^4.0.0",
