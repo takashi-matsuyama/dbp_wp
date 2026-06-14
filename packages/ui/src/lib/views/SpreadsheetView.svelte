@@ -46,6 +46,9 @@
 
   // Apply a formula to every row's menu_order draft (context: index, id, menuOrder).
   function applyFormula(): void {
+    if (formula.trim() === '') {
+      return;
+    }
     formulaError = null;
     try {
       const values = computeMenuOrders(posts, formula);
@@ -124,11 +127,14 @@
       <input
         bind:value={formula}
         placeholder="e.g. index * 10"
+        disabled={saving}
         onkeydown={(e) => e.key === 'Enter' && applyFormula()}
       />
     </label>
-    <button onclick={applyFormula} disabled={formula.trim() === ''}>Apply to all rows</button>
-    <span class="hint">cells: index, id, menuOrder</span>
+    <button onclick={applyFormula} disabled={saving || formula.trim() === ''}>
+      Apply to all rows
+    </button>
+    <span class="hint">cells: index, id, menuOrder (saved value)</span>
     {#if formulaError}<span class="error">{formulaError}</span>{/if}
   </div>
   <table class="sheet">
@@ -147,6 +153,7 @@
           <td>
             <input
               value={draftFor(post).title}
+              disabled={saving}
               oninput={(e) => setTitle(post, (e.currentTarget as HTMLInputElement).value)}
             />
           </td>
@@ -154,6 +161,7 @@
             <input
               type="number"
               value={draftFor(post).menuOrder}
+              disabled={saving}
               oninput={(e) => setMenuOrder(post, (e.currentTarget as HTMLInputElement).value)}
             />
           </td>

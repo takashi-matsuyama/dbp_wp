@@ -15,14 +15,22 @@ export interface FormulaEngine {
 
 /**
  * Formula engine backed by expr-eval-fork, which parses to an AST and evaluates without
- * `eval`/`Function`. Member access, assignment, function definitions, and randomness
- * are disabled so expressions stay pure, deterministic, and side-effect free.
+ * `eval`/`Function`. Member access, assignment, and function definitions are disabled,
+ * the nondeterministic `random()` function is removed, and results are constrained to
+ * finite numbers, so expressions stay pure, deterministic, and side-effect free.
  */
 export class SafeFormulaEngine implements FormulaEngine {
-  private readonly parser = new Parser({
-    allowMemberAccess: false,
-    operators: { assignment: false, fndef: false, random: false },
-  });
+  private readonly parser: Parser;
+
+  constructor() {
+    this.parser = new Parser({
+      allowMemberAccess: false,
+      operators: { assignment: false, fndef: false },
+    });
+    // The `operators.random` flag does not remove the random() function; delete it so
+    // evaluation stays deterministic.
+    delete this.parser.functions.random;
+  }
 
   evaluate(expression: string, context: Record<string, number>): number {
     let parsed: Expression;

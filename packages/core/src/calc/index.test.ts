@@ -35,4 +35,8 @@ describe('SafeFormulaEngine', () => {
     expect(() => engine.evaluate('a.constructor', { a: 1 })).toThrow();
     expect(() => engine.evaluate('a["__proto__"]', { a: 1 })).toThrow();
   });
+
+  it('removes the nondeterministic random() function', () => {
+    expect(() => engine.evaluate('random()', {})).toThrow();
+  });
 });
