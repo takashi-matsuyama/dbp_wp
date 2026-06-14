@@ -1,0 +1,78 @@
+# DBP WP Connector
+
+An optional WordPress plugin that lets the [DBP WP](https://github.com/takashi-matsuyama/dbp_wp)
+app read, edit, and delete **arbitrary post meta** over the REST API.
+
+WordPress core only exposes meta registered with `show_in_rest`. Without this
+connector the app runs in a restricted mode (standard fields only); with it
+installed and activated, the app can work with any custom field.
+
+The connector adds **no authentication of its own**. Requests authenticate with
+WordPress core [Application Passwords](https://make.wordpress.org/core/2020/11/05/application-passwords-integration-guide/),
+and every operation is gated by the same `edit_post` capability check WordPress
+applies when editing the target post.
+
+- **License:** GPL-2.0-or-later (the app itself is Apache-2.0; this plugin links
+  against GPL WordPress code and follows the WordPress-ecosystem convention).
+- **Requires:** WordPress 5.6+ (Application Passwords), PHP 7.4+.
+
+## Installation
+
+Copy the `dbp-wp-connector/` directory into `wp-content/plugins/` on the target
+site and activate it from **Plugins**.
+
+## REST API
+
+### `dbp_wp_meta` field (read / write)
+
+The connector registers a `dbp_wp_meta` field on every REST-enabled post type,
+available only in the `edit` context. It rides the standard post routes the app
+already uses, so meta travels with the post in a single round-trip.
+
+**Read** — `GET /wp-json/wp/v2/<type>/<id>?context=edit` (or the collection route)
+includes:
+
+```jsonc
+{
+  "id": 123,
+  "dbp_wp_meta": { "price": "1980", "_dbp_relation": "42" }
+}
+```
+
+Every meta key is returned as a flat `{ key: value }` map (single value per key).
+Multi-value meta keys are out of scope for now — only the first value is returned.
+Keys beginning with `_` are returned as well; the app hides them by default in its
+UI (a reversible toggle), so no data is withheld from a privileged operator.
+
+**Write** — `POST /wp-json/wp/v2/<type>/<id>` with:
+
+```jsonc
+{ "dbp_wp_meta": { "price": "2480" } }
+```
+
+upserts each provided key (`update_post_meta`). Only scalar values (string,
+number, boolean, or `null`) are written; non-scalar values are skipped.
+
+### Delete by key (per post)
+
+`DELETE /wp-json/dbp-wp/v1/posts/<id>/meta`
+
+```jsonc
+{ "keys": ["price", "_dbp_relation"] }
+```
+
+Deletes the named meta keys from **that one post** and returns:
+
+```jsonc
+{ "post_id": 123, "deleted": ["price"] }
+```
+
+Deletion is intentionally per-post. The connector does **not** replicate the
+legacy site-wide delete-by-key behaviour, which removed a key across every post.
+The `<id>` must be a normal post; revision and autosave IDs are rejected (400).
+
+## Detection from the app
+
+The app detects the connector by fetching `GET /wp-json/` on connect and checking
+whether `dbp-wp/v1` appears in the response's `namespaces` array — no dedicated
+endpoint is required.
