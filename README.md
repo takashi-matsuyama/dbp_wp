@@ -15,7 +15,7 @@ the application:
 | Package          | Role                                                                                                   |
 | ---------------- | ------------------------------------------------------------------------------------------------------ |
 | `@dbp-wp/core`   | Node library: WordPress REST client, formula engine, importer, typesetting data generation (npm).      |
-| `@dbp-wp/ui`     | Shell-agnostic Web SPA (React): table view and spreadsheet.                                             |
+| `@dbp-wp/ui`     | Shell-agnostic Web SPA (Svelte 5): table view and spreadsheet.                                             |
 | `dbp-wp` (CLI)   | `npx` shell: starts a localhost server, serves the UI, and opens the browser.                          |
 
 Credentials and WordPress requests stay in the Node process (CLI), so the browser UI never
