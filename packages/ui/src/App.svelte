@@ -9,7 +9,7 @@
   type Tab = 'table' | 'spreadsheet';
 
   let tab = $state<Tab>('table');
-  let connection = $state<ConnectionStatus>({ connected: false, siteUrl: null });
+  let connection = $state<ConnectionStatus>({ connected: false, siteUrl: null, connectorAvailable: false });
   let posts = $state<WpPost[]>([]);
   let loading = $state(true);
   let error = $state<string | null>(null);
@@ -23,7 +23,7 @@
         const res = await fetchPosts();
         if (res.unconfigured) {
           // Credentials disappeared between the checks; reflect the real state.
-          connection = { connected: false, siteUrl: null };
+          connection = { connected: false, siteUrl: null, connectorAvailable: false };
           posts = [];
         } else {
           posts = res.posts;
@@ -63,6 +63,9 @@
     </nav>
     <span class="conn">
       {connection.siteUrl}
+      <span class="connector-badge" class:restricted={!connection.connectorAvailable}>
+        {connection.connectorAvailable ? 'Connector: active' : 'Restricted mode'}
+      </span>
       <button onclick={onDisconnect}>Disconnect</button>
     </span>
   {/if}
@@ -79,6 +82,6 @@
   {:else if tab === 'table'}
     <TableView {posts} />
   {:else}
-    <SpreadsheetView {posts} onsaved={refresh} />
+    <SpreadsheetView {posts} connectorAvailable={connection.connectorAvailable} onsaved={refresh} />
   {/if}
 </main>

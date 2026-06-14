@@ -3,7 +3,15 @@
   import { savePosts, type PostUpdate } from '../api';
   import { computeMenuOrders } from '../formula';
 
-  let { posts, onsaved }: { posts: WpPost[]; onsaved: () => void | Promise<void> } = $props();
+  let {
+    posts,
+    connectorAvailable,
+    onsaved,
+  }: {
+    posts: WpPost[];
+    connectorAvailable: boolean;
+    onsaved: () => void | Promise<void>;
+  } = $props();
 
   let formula = $state('');
   let formulaError = $state<string | null>(null);
@@ -14,6 +22,11 @@
   }
 
   let drafts = $state<Record<number, Draft>>({});
+  // Per-post, per-key string drafts for custom field (meta) edits.
+  let metaDrafts = $state<Record<number, Record<string, string>>>({});
+  // Meta keys shown as editable columns (full mode only); managed by the user.
+  let metaColumns = $state<string[]>([]);
+  let newColumn = $state('');
   let saving = $state(false);
   let error = $state<string | null>(null);
   let rowErrors = $state<Record<number, string>>({});
@@ -37,9 +50,72 @@
     // else: reject non-integer input instead of silently truncating it
   }
 
+  // --- Custom field (meta) editing (full mode only) ---
+
+  // Existing meta keys across the loaded posts, excluding protected (`_`-prefixed) keys,
+  // offered as suggestions when adding a column. Users may still type a `_` key directly.
+  const existingMetaKeys = $derived.by(() => {
+    const keys = new Set<string>();
+    for (const post of posts) {
+      const meta = post.dbpWpMeta;
+      if (meta) {
+        for (const key of Object.keys(meta)) {
+          if (!key.startsWith('_')) {
+            keys.add(key);
+          }
+        }
+      }
+    }
+    return [...keys].sort();
+  });
+
+  function currentMeta(post: WpPost, key: string): string {
+    const value = post.dbpWpMeta?.[key];
+    return value === undefined || value === null ? '' : String(value);
+  }
+
+  function metaValueFor(post: WpPost, key: string): string {
+    return metaDrafts[post.id]?.[key] ?? currentMeta(post, key);
+  }
+
+  function setMeta(post: WpPost, key: string, value: string): void {
+    metaDrafts[post.id] = { ...metaDrafts[post.id], [key]: value };
+  }
+
+  function isMetaChanged(post: WpPost, key: string): boolean {
+    const draft = metaDrafts[post.id]?.[key];
+    return draft !== undefined && draft !== currentMeta(post, key);
+  }
+
+  function addColumn(): void {
+    const key = newColumn.trim();
+    if (key !== '' && !metaColumns.includes(key)) {
+      metaColumns = [...metaColumns, key];
+    }
+    newColumn = '';
+  }
+
+  function removeColumn(key: string): void {
+    metaColumns = metaColumns.filter((k) => k !== key);
+    // Drop pending drafts for the hidden column so they no longer count as changes.
+    const next: Record<number, Record<string, string>> = {};
+    for (const [id, row] of Object.entries(metaDrafts)) {
+      const rest: Record<string, string> = {};
+      for (const [k, v] of Object.entries(row)) {
+        if (k !== key) {
+          rest[k] = v;
+        }
+      }
+      next[Number(id)] = rest;
+    }
+    metaDrafts = next;
+  }
+
   function isChanged(post: WpPost): boolean {
     const draft = drafts[post.id];
-    return draft !== undefined && (draft.title !== post.title || draft.menuOrder !== post.menuOrder);
+    const fieldChanged =
+      draft !== undefined && (draft.title !== post.title || draft.menuOrder !== post.menuOrder);
+    return fieldChanged || metaColumns.some((key) => isMetaChanged(post, key));
   }
 
   const changed = $derived(posts.filter(isChanged));
@@ -75,6 +151,15 @@
       if (draft.menuOrder !== post.menuOrder) {
         update.menuOrder = draft.menuOrder;
       }
+      const meta: Record<string, string> = {};
+      for (const key of metaColumns) {
+        if (isMetaChanged(post, key)) {
+          meta[key] = metaValueFor(post, key);
+        }
+      }
+      if (Object.keys(meta).length > 0) {
+        update.meta = meta;
+      }
       return update;
     });
   }
@@ -98,10 +183,13 @@
       if (succeeded.length > 0) {
         // Drop saved rows' drafts; keep failed rows editable so a retry only resends them.
         const remaining = { ...drafts };
+        const remainingMeta = { ...metaDrafts };
         for (const id of succeeded) {
           delete remaining[id];
+          delete remainingMeta[id];
         }
         drafts = remaining;
+        metaDrafts = remainingMeta;
         await onsaved();
       }
     } catch (e) {
@@ -137,12 +225,49 @@
     <span class="hint">cells: index, id, menuOrder (saved value)</span>
     {#if formulaError}<span class="error">{formulaError}</span>{/if}
   </div>
+
+  {#if connectorAvailable}
+    <div class="meta-bar">
+      <label>
+        Custom field column
+        <input
+          list="dbp-meta-keys"
+          bind:value={newColumn}
+          placeholder="meta key, e.g. price"
+          disabled={saving}
+          onkeydown={(e) => e.key === 'Enter' && addColumn()}
+        />
+      </label>
+      <datalist id="dbp-meta-keys">
+        {#each existingMetaKeys as key (key)}
+          <option value={key}></option>
+        {/each}
+      </datalist>
+      <button onclick={addColumn} disabled={saving || newColumn.trim() === ''}>Add column</button>
+    </div>
+  {:else}
+    <p class="restricted-note">
+      Custom field editing needs the DBP WP Connector plugin. Standard fields are editable.
+    </p>
+  {/if}
+
   <table class="sheet">
     <thead>
       <tr>
         <th>ID</th>
         <th>Title</th>
         <th>Menu order</th>
+        {#each metaColumns as key (key)}
+          <th class="meta-col">
+            <span class="meta-key">{key}</span>
+            <button
+              class="col-remove"
+              title="Hide this column"
+              onclick={() => removeColumn(key)}
+              disabled={saving}>×</button
+            >
+          </th>
+        {/each}
         <th></th>
       </tr>
     </thead>
@@ -165,6 +290,15 @@
               oninput={(e) => setMenuOrder(post, (e.currentTarget as HTMLInputElement).value)}
             />
           </td>
+          {#each metaColumns as key (key)}
+            <td class:changed-cell={isMetaChanged(post, key)}>
+              <input
+                value={metaValueFor(post, key)}
+                disabled={saving}
+                oninput={(e) => setMeta(post, key, (e.currentTarget as HTMLInputElement).value)}
+              />
+            </td>
+          {/each}
           <td class="row-status">
             {#if rowErrors[post.id]}<span class="error">{rowErrors[post.id]}</span>{/if}
           </td>
@@ -173,3 +307,29 @@
     </tbody>
   </table>
 {/if}
+
+<style>
+  .meta-bar {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin: 0.5rem 0;
+  }
+  .restricted-note {
+    margin: 0.5rem 0;
+    font-size: 0.85rem;
+    opacity: 0.75;
+  }
+  .meta-col {
+    white-space: nowrap;
+  }
+  .col-remove {
+    margin-left: 0.25rem;
+    padding: 0 0.35rem;
+    line-height: 1;
+    cursor: pointer;
+  }
+  .changed-cell input {
+    background: rgba(255, 215, 0, 0.18);
+  }
+</style>

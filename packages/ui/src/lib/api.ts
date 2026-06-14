@@ -38,6 +38,8 @@ export async function fetchPosts(query: ListPostsQuery = {}): Promise<PostsRespo
 export interface ConnectionStatus {
   connected: boolean;
   siteUrl: string | null;
+  /** Whether the companion plugin is active on the connected site (full mode). */
+  connectorAvailable: boolean;
 }
 
 export interface ConnectInput {
@@ -52,7 +54,12 @@ export async function getConnection(): Promise<ConnectionStatus> {
   if (!res.ok) {
     throw new Error(`Failed to read connection status: ${res.status}`);
   }
-  return (await res.json()) as ConnectionStatus;
+  const data = (await res.json()) as Partial<ConnectionStatus>;
+  return {
+    connected: data.connected ?? false,
+    siteUrl: data.siteUrl ?? null,
+    connectorAvailable: data.connectorAvailable ?? false,
+  };
 }
 
 /**
@@ -71,7 +78,11 @@ export async function connect(input: ConnectInput): Promise<ConnectionStatus> {
   if (!res.ok) {
     throw new Error(data.error ?? `Connection failed: ${res.status}`);
   }
-  return { connected: data.connected ?? true, siteUrl: data.siteUrl ?? input.siteUrl };
+  return {
+    connected: data.connected ?? true,
+    siteUrl: data.siteUrl ?? input.siteUrl,
+    connectorAvailable: data.connectorAvailable ?? false,
+  };
 }
 
 /** Clear the CLI's in-memory credentials. */
@@ -87,6 +98,8 @@ export interface PostUpdate {
   title?: string;
   menuOrder?: number;
   status?: string;
+  /** Arbitrary meta to write via the companion plugin (full mode only). */
+  meta?: Record<string, unknown>;
 }
 
 export interface UpdateResult {
