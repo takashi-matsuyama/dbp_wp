@@ -1,8 +1,25 @@
 {
   "name": "dbp-wp",
-  "version": "0.0.0",
-  "description": "DBP WP CLI: starts a localhost server, serves the UI, and opens the browser.",
+  "version": "0.1.0",
+  "description": "Local-first app to bulk-edit WordPress content over the REST API. Runs via npx: starts a localhost server, serves the web UI, and opens your browser.",
   "license": "Apache-2.0",
+  "author": "Takashi Matsuyama",
+  "homepage": "https://wp.dbp.jp",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/takashi-matsuyama/dbp_wp.git",
+    "directory": "packages/cli"
+  },
+  "bugs": {
+    "url": "https://github.com/takashi-matsuyama/dbp_wp/issues"
+  },
+  "keywords": [
+    "wordpress",
+    "wordpress-rest-api",
+    "bulk-edit",
+    "spreadsheet",
+    "cli"
+  ],
   "type": "module",
   "bin": {
     "dbp-wp": "./dist/index.js"
@@ -19,8 +36,8 @@
     "start": "node dist/index.js"
   },
   "dependencies": {
-    "@dbp-wp/core": "*",
-    "@dbp-wp/ui": "*"
+    "@dbp-wp/core": "0.1.0",
+    "@dbp-wp/ui": "0.1.0"
   },
   "devDependencies": {
     "tsup": "^8.3.0"

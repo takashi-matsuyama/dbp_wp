@@ -1,8 +1,18 @@
 {
   "name": "@dbp-wp/ui",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "DBP WP web UI: table view and spreadsheet (Svelte 5 SPA). Served by the dbp-wp CLI.",
   "license": "Apache-2.0",
+  "author": "Takashi Matsuyama",
+  "homepage": "https://wp.dbp.jp",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/takashi-matsuyama/dbp_wp.git",
+    "directory": "packages/ui"
+  },
+  "bugs": {
+    "url": "https://github.com/takashi-matsuyama/dbp_wp/issues"
+  },
   "type": "module",
   "files": [
     "dist"
@@ -11,17 +21,18 @@
     "./package.json": "./package.json",
     "./dist/*": "./dist/*"
   },
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
     "typecheck": "svelte-check --tsconfig ./tsconfig.json"
   },
-  "dependencies": {
-    "@dbp-wp/core": "*",
-    "@tanstack/table-core": "^8.20.5"
-  },
   "devDependencies": {
+    "@dbp-wp/core": "0.1.0",
+    "@tanstack/table-core": "^8.20.5",
     "@sveltejs/vite-plugin-svelte": "^4.0.0",
     "svelte": "^5.1.0",
     "svelte-check": "^4.0.0",

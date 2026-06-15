@@ -1,8 +1,23 @@
 {
   "name": "@dbp-wp/core",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Core library for DBP WP: WordPress REST client, formula engine, importer, and typesetting data generation.",
   "license": "Apache-2.0",
+  "author": "Takashi Matsuyama",
+  "homepage": "https://wp.dbp.jp",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/takashi-matsuyama/dbp_wp.git",
+    "directory": "packages/core"
+  },
+  "bugs": {
+    "url": "https://github.com/takashi-matsuyama/dbp_wp/issues"
+  },
+  "keywords": [
+    "wordpress",
+    "wordpress-rest-api",
+    "bulk-edit"
+  ],
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -15,6 +30,9 @@
   "files": [
     "dist"
   ],
+  "publishConfig": {
+    "access": "public"
+  },
   "engines": {
     "node": ">=20"
   },
