@@ -7,6 +7,11 @@ const CLI_PORT = process.env.DBP_WP_CLI_PORT ?? '4317';
 
 export default defineConfig({
   plugins: [svelte()],
+  // Default (full) build: the data layer is the CLI client. Defined as a literal so the
+  // demo-only local store is tree-shaken out of the shipped UI.
+  define: {
+    'import.meta.env.VITE_DBP_DEMO': JSON.stringify('false'),
+  },
   server: {
     proxy: {
       // Target 127.0.0.1 (not localhost) to match the CLI's IPv4 loopback bind.

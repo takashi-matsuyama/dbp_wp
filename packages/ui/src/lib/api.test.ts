@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { listPostsPath, printPostsPath } from './api';
+import { listPostsPath, printPostsPath } from './api.cli';
 
 describe('listPostsPath', () => {
   it('returns the base path with no query', () => {

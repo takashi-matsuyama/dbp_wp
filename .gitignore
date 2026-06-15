@@ -6,6 +6,7 @@ npm-debug.log*
 
 # Build artifacts
 dist/
+demo-dist/
 *.tsbuildinfo
 .turbo/
 .tsup/
