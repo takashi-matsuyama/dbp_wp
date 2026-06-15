@@ -1,4 +1,4 @@
-import type { WpPost, WpPostType } from '@dbp-wp/core';
+import type { PrintRecord, WpPost, WpPostType } from '@dbp-wp/core';
 
 // The UI talks only to the local CLI server (`/api/...`), never to WordPress directly,
 // so the browser never holds credentials and is not subject to cross-origin rules.
@@ -35,6 +35,38 @@ export async function fetchPosts(query: ListPostsQuery = {}): Promise<PostsRespo
   const data = (await res.json()) as Partial<PostsResponse>;
   return {
     posts: Array.isArray(data.posts) ? data.posts : [],
+    unconfigured: data.unconfigured === true,
+  };
+}
+
+/** Build the local API path for listing Print Design records. Exported for unit testing. */
+export function printPostsPath(query: ListPostsQuery = {}): string {
+  const params = new URLSearchParams();
+  if (query.type) {
+    params.set('type', query.type);
+  }
+  if (query.page && query.page > 1) {
+    params.set('page', String(query.page));
+  }
+  const qs = params.toString();
+  return qs ? `/api/print/posts?${qs}` : '/api/print/posts';
+}
+
+export interface PrintRecordsResponse {
+  records: PrintRecord[];
+  /** True when the CLI has no WordPress credentials configured yet (skeleton mode). */
+  unconfigured: boolean;
+}
+
+/** Fetch posts flattened for Print Design (content/excerpt + featured image + terms). */
+export async function fetchPrintRecords(query: ListPostsQuery = {}): Promise<PrintRecordsResponse> {
+  const res = await fetch(printPostsPath(query));
+  if (!res.ok) {
+    throw new Error(`Failed to load print records: ${res.status}`);
+  }
+  const data = (await res.json()) as Partial<PrintRecordsResponse>;
+  return {
+    records: Array.isArray(data.records) ? data.records : [],
     unconfigured: data.unconfigured === true,
   };
 }

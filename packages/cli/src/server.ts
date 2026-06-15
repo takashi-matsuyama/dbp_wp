@@ -117,6 +117,40 @@ async function handlePosts(
   }
 }
 
+async function handlePrintPosts(
+  req: IncomingMessage,
+  res: ServerResponse,
+  url: URL,
+  options: ServerOptions,
+): Promise<void> {
+  try {
+    if (req.method !== 'GET') {
+      sendJson(res, 405, { error: 'Method not allowed' });
+      return;
+    }
+    const credentials = options.state.credentials;
+    if (!credentials) {
+      sendJson(res, 200, { records: [], unconfigured: true });
+      return;
+    }
+    const client = new WpClient(credentials);
+    const type = url.searchParams.get('type');
+    const pageRaw = url.searchParams.get('page');
+    const page = pageRaw ? Number.parseInt(pageRaw, 10) : undefined;
+    // Print needs content/excerpt + embedded media/terms, so this uses the `_embed`
+    // listing rather than the lean table/spreadsheet one.
+    const records = await client.listPostsForPrint({
+      ...(type ? { type } : {}),
+      ...(page && page > 0 ? { page } : {}),
+    });
+    sendJson(res, 200, { records, unconfigured: false });
+  } catch (e) {
+    if (!res.headersSent) {
+      sendJson(res, 502, { error: e instanceof Error ? e.message : 'Upstream request failed' });
+    }
+  }
+}
+
 async function handleTypes(
   req: IncomingMessage,
   res: ServerResponse,
@@ -470,6 +504,10 @@ async function handleApiRoutes(
   }
   if (url.pathname === '/api/posts/meta') {
     await handleMetaDelete(req, res, options);
+    return;
+  }
+  if (url.pathname === '/api/print/posts') {
+    await handlePrintPosts(req, res, url, options);
     return;
   }
   if (url.pathname === '/api/posts') {

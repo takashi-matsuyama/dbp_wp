@@ -12,8 +12,9 @@
   import TableView from './lib/views/TableView.svelte';
   import SpreadsheetView from './lib/views/SpreadsheetView.svelte';
   import ImportView from './lib/views/ImportView.svelte';
+  import PrintView from './lib/views/PrintView.svelte';
 
-  type Tab = 'table' | 'spreadsheet' | 'import';
+  type Tab = 'table' | 'spreadsheet' | 'import' | 'print';
 
   let tab = $state<Tab>('table');
   let connection = $state<ConnectionStatus>({ connected: false, siteUrl: null, connectorAvailable: false });
@@ -89,6 +90,7 @@
         Spreadsheet
       </button>
       <button class:active={tab === 'import'} onclick={() => (tab = 'import')}>Import</button>
+      <button class:active={tab === 'print'} onclick={() => (tab = 'print')}>Print</button>
     </nav>
     {#if postTypes.length > 0}
       <label class="type-select">
@@ -133,13 +135,17 @@
         onsaved={refresh}
       />
     {/key}
-  {:else}
+  {:else if tab === 'import'}
     {#key selectedType}
       <ImportView
         type={selectedType}
         connectorAvailable={connection.connectorAvailable}
         onimported={refresh}
       />
+    {/key}
+  {:else}
+    {#key selectedType}
+      <PrintView type={selectedType} connectorAvailable={connection.connectorAvailable} />
     {/key}
   {/if}
 </main>
