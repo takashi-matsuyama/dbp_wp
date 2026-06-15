@@ -18,9 +18,17 @@ if ( ! defined( 'ABSPATH' ) ) {
  *
  * - A `dbp_wp_meta` field on every REST-enabled post type, readable and writable
  *   in the `edit` context, rides the existing `/wp/v2/<type>/<id>` routes the app
- *   already uses. Reads return every meta key; writes upsert the provided keys.
+ *   already uses. Reads return every non-protected meta key; writes upsert the
+ *   provided keys.
  * - A `DELETE /dbp-wp/v1/posts/<id>/meta` route deletes named meta keys on a
  *   single post (there is no core equivalent).
+ *
+ * Protected/internal meta (keys for which `is_protected_meta()` is true — by
+ * default `_`-prefixed keys such as `_edit_lock`, `_thumbnail_id`, `_wp_*`) is
+ * never read, written, or deleted through the connector, so an `edit_post`-capable
+ * user cannot use it as a back door to core/plugin internals. (A future feature
+ * that needs its own protected keys should register them with `register_meta()`
+ * and an explicit `auth_callback` rather than relax this filter.)
  *
  * The connector adds no authentication. Requests authenticate with WordPress core
  * Application Passwords, and every operation is gated by the same `edit_post`
@@ -80,11 +88,12 @@ class DBP_WP_Connector_REST {
 	}
 
 	/**
-	 * Read every meta key for a post as a flat `{ key: value }` map.
+	 * Read every non-protected meta key for a post as a flat `{ key: value }` map.
 	 *
 	 * `get_post_meta()` returns each key as an array of raw (possibly serialized)
-	 * values; this exposes the first value per key, unserialized. Multi-value meta
-	 * keys are out of scope for the MVP and only the first value is returned.
+	 * values; this exposes the first value per key, unserialized. Protected/internal
+	 * meta (`is_protected_meta()`) is skipped. Multi-value meta keys are out of scope
+	 * for the MVP and only the first value is returned.
 	 *
 	 * @param array $post_arr Prepared post response data (contains the post `id`).
 	 * @return array<string, mixed> Map of meta key to single value.
@@ -98,6 +107,9 @@ class DBP_WP_Connector_REST {
 		$raw    = get_post_meta( $post_id );
 		$result = array();
 		foreach ( $raw as $key => $values ) {
+			if ( is_protected_meta( $key, 'post' ) ) {
+				continue; // Never expose protected/internal meta (e.g. _edit_lock, _wp_*).
+			}
 			$first          = ( is_array( $values ) && array() !== $values ) ? reset( $values ) : '';
 			$result[ $key ] = maybe_unserialize( $first );
 		}
@@ -135,6 +147,9 @@ class DBP_WP_Connector_REST {
 		foreach ( $value as $key => $meta_value ) {
 			if ( ! is_string( $key ) || '' === $key ) {
 				continue;
+			}
+			if ( is_protected_meta( $key, 'post' ) ) {
+				continue; // Refuse to write protected/internal meta keys (e.g. _wp_*, _thumbnail_id).
 			}
 			if ( null !== $meta_value && ! is_scalar( $meta_value ) ) {
 				continue; // MVP writes scalar meta values only.
@@ -233,6 +248,9 @@ class DBP_WP_Connector_REST {
 		foreach ( $keys as $key ) {
 			if ( ! is_string( $key ) || '' === $key ) {
 				continue;
+			}
+			if ( is_protected_meta( $key, 'post' ) ) {
+				continue; // Refuse to delete protected/internal meta keys.
 			}
 			// Re-slash the key: delete_post_meta() unslashes it internally before matching.
 			if ( delete_post_meta( $post_id, wp_slash( $key ) ) ) {

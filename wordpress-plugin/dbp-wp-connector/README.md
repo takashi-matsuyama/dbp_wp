@@ -1,7 +1,9 @@
 # DBP WP Connector
 
 An optional WordPress plugin that lets the [DBP WP](https://github.com/takashi-matsuyama/dbp_wp)
-app read, edit, and delete **arbitrary post meta** over the REST API.
+app read, edit, and delete **custom post meta** over the REST API. Protected/internal
+meta (keys for which WordPress' `is_protected_meta()` is true — by default `_`-prefixed
+keys such as `_edit_lock`, `_thumbnail_id`, `_wp_*`) is excluded from all three operations.
 
 WordPress core only exposes meta registered with `show_in_rest`. Without this
 connector the app runs in a restricted mode (standard fields only); with it
@@ -35,14 +37,14 @@ includes:
 ```jsonc
 {
   "id": 123,
-  "dbp_wp_meta": { "price": "1980", "_dbp_relation": "42" }
+  "dbp_wp_meta": { "price": "1980", "sku": "A-1980" }
 }
 ```
 
-Every meta key is returned as a flat `{ key: value }` map (single value per key).
-Multi-value meta keys are out of scope for now — only the first value is returned.
-Keys beginning with `_` are returned as well; the app hides them by default in its
-UI (a reversible toggle), so no data is withheld from a privileged operator.
+Every non-protected meta key is returned as a flat `{ key: value }` map (single value
+per key). Multi-value meta keys are out of scope for now — only the first value is
+returned. Protected/internal meta (`is_protected_meta()`, e.g. `_`-prefixed core keys)
+is omitted.
 
 **Write** — `POST /wp-json/wp/v2/<type>/<id>` with:
 
@@ -51,17 +53,18 @@ UI (a reversible toggle), so no data is withheld from a privileged operator.
 ```
 
 upserts each provided key (`update_post_meta`). Only scalar values (string,
-number, boolean, or `null`) are written; non-scalar values are skipped.
+number, boolean, or `null`) are written; non-scalar values are skipped. Protected
+meta keys (`is_protected_meta()`) are also skipped.
 
 ### Delete by key (per post)
 
 `DELETE /wp-json/dbp-wp/v1/posts/<id>/meta`
 
 ```jsonc
-{ "keys": ["price", "_dbp_relation"] }
+{ "keys": ["price", "sku"] }
 ```
 
-Deletes the named meta keys from **that one post** and returns:
+Deletes the named (non-protected) meta keys from **that one post** and returns:
 
 ```jsonc
 { "post_id": 123, "deleted": ["price"] }
