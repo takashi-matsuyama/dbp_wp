@@ -1,3 +1,4 @@
+import { buildPrintRecord, type PrintRecord } from './print';
 import type {
   DeleteMetaResult,
   ListPostsParams,
@@ -132,6 +133,26 @@ export class WpClient {
     });
     const raw = await this.request<WpPostResponse[]>(`/wp/v2/${type}?${query.toString()}`);
     return raw.map(normalizePost);
+  }
+
+  /**
+   * List posts as {@link PrintRecord}s for Print Design. Requests `_embed` (so featured
+   * media and taxonomy terms come back inline) plus `content`/`excerpt`; the standard
+   * table/spreadsheet listing ({@link WpClient.listPosts}) is unaffected.
+   */
+  async listPostsForPrint(params: ListPostsParams = {}): Promise<PrintRecord[]> {
+    const type = params.type ?? 'posts';
+    assertRouteSegment(type);
+    const perPage = clampInt(params.perPage ?? 100, 1, 100);
+    const page = clampInt(params.page ?? 1, 1, Number.MAX_SAFE_INTEGER);
+    const query = new URLSearchParams({
+      context: 'edit',
+      per_page: String(perPage),
+      page: String(page),
+      _embed: '1',
+    });
+    const raw = await this.request<WpPostResponse[]>(`/wp/v2/${type}?${query.toString()}`);
+    return raw.map(buildPrintRecord);
   }
 
   /**

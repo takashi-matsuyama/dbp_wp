@@ -31,6 +31,19 @@ export interface WpPostResponse {
    * Present only when the connector is active; absent in restricted mode.
    */
   dbp_wp_meta?: Record<string, unknown>;
+  /** Rendered/raw content. Present when the request asks for it (e.g. Print Design). */
+  content?: { rendered?: string; raw?: string };
+  /** Rendered/raw excerpt. Present when the request asks for it. */
+  excerpt?: { rendered?: string; raw?: string };
+  /**
+   * Embedded resources, present only when the request was made with `_embed`. Shapes are
+   * intentionally loose (entries may be error objects); consumers validate at runtime.
+   * `wp:featuredmedia` carries media objects; `wp:term` is an array of term-arrays.
+   */
+  _embedded?: {
+    'wp:featuredmedia'?: unknown;
+    'wp:term'?: unknown;
+  };
 }
 
 /** Normalized, internal post model used by DBP WP. */

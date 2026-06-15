@@ -18,3 +18,4 @@ export {
   normalizeStatus,
   buildImportPlan,
 } from './importer';
+export { type PrintRecord, TemplateParseError, renderTemplate, buildPrintRecord } from './print';
