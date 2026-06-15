@@ -1,0 +1,196 @@
+name: Release
+
+# Triggered by a `vX.Y.Z` tag push for a real publish, or by manual
+# workflow_dispatch (dry-run only) to smoke-test packing and the gates.
+# Real publish is double-gated: a workflow_dispatch run always takes the
+# dry-run path (the `event_name == 'push'` check below), so an accidental
+# manual trigger can never leak a publish.
+#
+# Publishing uses npm's OIDC trusted-publisher path -- there is no NPM_TOKEN.
+# Each scoped package's Trusted Publisher on npmjs.com must point at this repo
+# and this `release.yml` workflow. npm CLI >= 11.5 (Node 24, see .nvmrc) runs
+# the OIDC two-audience exchange (sigstore + npm) and emits SLSA provenance.
+#
+# Ordering: @dbp-wp/core and @dbp-wp/ui publish first (publish-libs), then
+# `dbp-wp` (publish-cli, needs publish-libs). The CLI pins both siblings to the
+# exact version, so they must be on the registry before the CLI, or a fresh
+# `npx dbp-wp@<v>` would 404 on its dependencies.
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Skip the actual publish (pack + gates only -- does not exercise OIDC auth or provenance). A tag push always publishes regardless of this input.'
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # ==========================================================
+  # 1. verify -- the tag's tree passes the same gates as local development
+  #    before any publish step runs (catches a tag cut at a broken commit).
+  # ==========================================================
+  verify:
+    name: Verify (typecheck / test / lint / build / prod audit)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Setup Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version-file: '.nvmrc'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Production dependency audit (must be clean)
+        run: npm audit --omit=dev
+
+  # ==========================================================
+  # 2. publish-libs -- @dbp-wp/core and @dbp-wp/ui publish in parallel via a
+  #    matrix, each exchanging an OIDC token with npm for trusted publishing
+  #    and SLSA provenance. No NPM_TOKEN secret is used.
+  #
+  #    fail-fast: if one library fails to publish, stop the other so the
+  #    operator can fix the cause and re-tag without exposing a partial set.
+  # ==========================================================
+  publish-libs:
+    name: Publish ${{ matrix.pkg }}
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      # OIDC token exchange with the npm registry (trusted publishing) and
+      # provenance attestation both require id-token: write on the job.
+      id-token: write
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - pkg: '@dbp-wp/core'
+            dir: packages/core
+          - pkg: '@dbp-wp/ui'
+            dir: packages/ui
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      # registry-url is deliberately omitted. Setting it makes setup-node write
+      # `//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}` to a temp .npmrc;
+      # with NODE_AUTH_TOKEN unset (we publish via OIDC, not a token) npm would
+      # still ship an empty bearer credential, the registry would reject it, and
+      # the OIDC trusted-publisher exchange would never happen. We overwrite
+      # ~/.npmrc with a registry-only line in the next step so OIDC takes over.
+      - name: Setup Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version-file: '.nvmrc'
+          cache: 'npm'
+
+      - name: Configure npm registry without a token line (so OIDC takes over)
+        run: |
+          echo "registry=https://registry.npmjs.org/" > ~/.npmrc
+          cat ~/.npmrc
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Publish ${{ matrix.pkg }} (OIDC trusted publishing + provenance)
+        working-directory: ${{ matrix.dir }}
+        run: |
+          set -euo pipefail
+          if [ "$GITHUB_EVENT_NAME" = "push" ] && [ "${{ inputs.dry_run || 'false' }}" != "true" ]; then
+            # Idempotency guard: a re-tagged recovery release (or a version
+            # already on the registry) should skip rather than fail the job.
+            VERSION="$(node -p "require('./package.json').version")"
+            if [ "$(npm view "${{ matrix.pkg }}@$VERSION" version 2>/dev/null || true)" = "$VERSION" ]; then
+              echo "${{ matrix.pkg }}@$VERSION is already on the registry -- skipping (idempotent re-run)"
+              exit 0
+            fi
+            echo "Publishing ${{ matrix.pkg }}@$VERSION via OIDC + provenance"
+            npm publish --provenance --access public
+          else
+            echo "Dry-run (event=$GITHUB_EVENT_NAME, dry_run=${{ inputs.dry_run || 'false' }}): npm publish --dry-run"
+            npm publish --access public --dry-run
+          fi
+
+  # ==========================================================
+  # 3. publish-cli -- `dbp-wp` depends on @dbp-wp/core and @dbp-wp/ui at the
+  #    exact version, so it publishes only after publish-libs succeeds.
+  # ==========================================================
+  publish-cli:
+    name: Publish dbp-wp
+    needs: publish-libs
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Setup Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version-file: '.nvmrc'
+          cache: 'npm'
+
+      - name: Configure npm registry without a token line (so OIDC takes over)
+        run: |
+          echo "registry=https://registry.npmjs.org/" > ~/.npmrc
+          cat ~/.npmrc
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Publish dbp-wp (OIDC trusted publishing + provenance)
+        working-directory: packages/cli
+        run: |
+          set -euo pipefail
+          if [ "$GITHUB_EVENT_NAME" = "push" ] && [ "${{ inputs.dry_run || 'false' }}" != "true" ]; then
+            VERSION="$(node -p "require('./package.json').version")"
+            if [ "$(npm view "dbp-wp@$VERSION" version 2>/dev/null || true)" = "$VERSION" ]; then
+              echo "dbp-wp@$VERSION is already on the registry -- skipping (idempotent re-run)"
+              exit 0
+            fi
+            echo "Publishing dbp-wp@$VERSION via OIDC + provenance"
+            npm publish --provenance --access public
+          else
+            echo "Dry-run (event=$GITHUB_EVENT_NAME, dry_run=${{ inputs.dry_run || 'false' }}): npm publish --dry-run"
+            npm publish --access public --dry-run
+          fi

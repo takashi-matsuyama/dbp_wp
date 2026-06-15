@@ -22,7 +22,7 @@
   ],
   "type": "module",
   "bin": {
-    "dbp-wp": "./dist/index.js"
+    "dbp-wp": "dist/index.js"
   },
   "files": [
     "dist"
