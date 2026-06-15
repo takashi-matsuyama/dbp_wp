@@ -5,6 +5,7 @@ import {
   buildPostBody,
   buildUpdateBody,
   hasConnectorNamespace,
+  normalizePostTypes,
   normalizeSiteUrl,
   sanitizeMetaKeys,
 } from './wp-client';
@@ -131,5 +132,35 @@ describe('hasConnectorNamespace', () => {
     expect(hasConnectorNamespace(['wp/v2'])).toBe(false);
     expect(hasConnectorNamespace(undefined)).toBe(false);
     expect(hasConnectorNamespace('dbp-wp/v1')).toBe(false);
+  });
+});
+
+describe('normalizePostTypes', () => {
+  it('maps the /wp/v2/types object to a list using rest_base', () => {
+    expect(
+      normalizePostTypes({
+        post: { name: 'Posts', slug: 'post', rest_base: 'posts' },
+        page: { name: 'Pages', slug: 'page', rest_base: 'pages' },
+      }),
+    ).toEqual([
+      { slug: 'post', restBase: 'posts', name: 'Posts' },
+      { slug: 'page', restBase: 'pages', name: 'Pages' },
+    ]);
+  });
+
+  it('skips entries without a valid rest_base and falls back to the key for missing fields', () => {
+    expect(
+      normalizePostTypes({
+        cpt: { rest_base: 'cpts' },
+        internal: { name: 'Internal' },
+        traversal: { rest_base: '..' },
+        spaced: { rest_base: 'bad base' },
+      }),
+    ).toEqual([{ slug: 'cpt', restBase: 'cpts', name: 'cpt' }]);
+  });
+
+  it('returns an empty list for a non-object', () => {
+    expect(normalizePostTypes(null)).toEqual([]);
+    expect(normalizePostTypes('x')).toEqual([]);
   });
 });

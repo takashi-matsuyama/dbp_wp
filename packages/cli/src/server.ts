@@ -5,7 +5,12 @@ import { extname, join, relative, resolve } from 'node:path';
 import { WpClient, WpRequestError, type WpCredentials } from '@dbp-wp/core';
 import { parseCredentialsInput } from './config';
 import { isAllowedHost, isCrossSiteRequest, isJsonContentType } from './host';
-import { parseBatchUpdates, parseBulkMetaDelete, parseMetaDelete } from './updates';
+import {
+  parseBatchUpdates,
+  parseBulkMetaDelete,
+  parseMetaDelete,
+  parsePostTypeSlug,
+} from './updates';
 
 const MIME: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -111,6 +116,30 @@ async function handlePosts(
   }
 }
 
+async function handleTypes(
+  req: IncomingMessage,
+  res: ServerResponse,
+  options: ServerOptions,
+): Promise<void> {
+  if (req.method !== 'GET') {
+    sendJson(res, 405, { error: 'Method not allowed' });
+    return;
+  }
+  const credentials = options.state.credentials;
+  if (!credentials) {
+    sendJson(res, 200, { types: [] });
+    return;
+  }
+  try {
+    const types = await new WpClient(credentials).listPostTypes();
+    sendJson(res, 200, { types });
+  } catch (e) {
+    if (!res.headersSent) {
+      sendJson(res, 502, { error: e instanceof Error ? e.message : 'Upstream request failed' });
+    }
+  }
+}
+
 async function handlePostsBatch(
   req: IncomingMessage,
   res: ServerResponse,
@@ -142,16 +171,20 @@ async function handlePostsBatch(
     sendJson(res, 400, { error: 'Invalid updates payload.' });
     return;
   }
+  const type = parsePostTypeSlug((body as Record<string, unknown>).type);
+  if (type === null) {
+    sendJson(res, 400, { error: 'Invalid post type.' });
+    return;
+  }
 
   // Apply sequentially; report success/failure per row rather than failing the batch.
-  // The UI currently lists only the default `posts` route, so updates target it too;
-  // when post-type selection is added, the route slug must be threaded through here.
+  // The whole batch targets one post type (the slug threaded from the UI's selector).
   const client = new WpClient(credentials);
   const results: Array<{ id: number; ok: boolean; error?: string }> = [];
   for (const update of updates) {
     try {
       // Standard fields and connector meta ride a single request per row.
-      await client.updatePost(update.id, update.fields, 'posts', update.meta);
+      await client.updatePost(update.id, update.fields, type, update.meta);
       results.push({ id: update.id, ok: true });
     } catch (e) {
       results.push({ id: update.id, ok: false, error: e instanceof Error ? e.message : 'Update failed' });
@@ -354,6 +387,10 @@ async function handleApiRoutes(
 ): Promise<void> {
   if (url.pathname === '/api/connection') {
     await handleConnection(req, res, options);
+    return;
+  }
+  if (url.pathname === '/api/types') {
+    await handleTypes(req, res, options);
     return;
   }
   if (url.pathname === '/api/posts/batch') {

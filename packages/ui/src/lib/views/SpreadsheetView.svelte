@@ -5,10 +5,12 @@
 
   let {
     posts,
+    type,
     connectorAvailable,
     onsaved,
   }: {
     posts: WpPost[];
+    type: string;
     connectorAvailable: boolean;
     onsaved: () => void | Promise<void>;
   } = $props();
@@ -220,7 +222,7 @@
     error = null;
     rowErrors = {};
     try {
-      const results = await savePosts(buildUpdates());
+      const results = await savePosts(buildUpdates(), type);
       const errors: Record<number, string> = {};
       const succeeded: number[] = [];
       for (const result of results) {

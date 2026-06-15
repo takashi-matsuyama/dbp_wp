@@ -2,6 +2,7 @@ export type {
   WpCredentials,
   WpPost,
   WpPostResponse,
+  WpPostType,
   ListPostsParams,
   UpdatePostFields,
   DeleteMetaResult,

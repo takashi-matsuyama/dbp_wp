@@ -5,13 +5,15 @@ import type {
   WpCredentials,
   WpPost,
   WpPostResponse,
+  WpPostType,
 } from './types';
 
 /** Hosts for which plain http is tolerated (local development). */
 const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]', '::1']);
 
-/** Allowed characters for a REST route segment (post type slug). */
-const ROUTE_SEGMENT = /^[a-z0-9._-]+$/i;
+/** Allowed characters for a REST route segment (post type slug). No dots: a `.`/`..`
+ *  segment would be resolved by the URL parser and traverse the REST path. */
+const ROUTE_SEGMENT = /^[a-z0-9_-]+$/i;
 
 /** REST field added by the companion plugin to carry arbitrary post meta. */
 const META_FIELD = 'dbp_wp_meta';
@@ -106,6 +108,15 @@ export class WpClient {
     }
 
     return (await response.json()) as T;
+  }
+
+  /**
+   * List the REST-enabled post types on the site (edit context), so the app can offer
+   * a type selector. Returns each type's REST route base and display name.
+   */
+  async listPostTypes(): Promise<WpPostType[]> {
+    const raw = await this.request<unknown>('/wp/v2/types?context=edit');
+    return normalizePostTypes(raw);
   }
 
   /** List posts of a given type in edit context (raw fields, for editing). */
@@ -258,6 +269,33 @@ export function sanitizeMetaKeys(keys: unknown): string[] {
 /** True when a REST index `namespaces` list includes the connector namespace. */
 export function hasConnectorNamespace(namespaces: unknown): boolean {
   return Array.isArray(namespaces) && namespaces.includes(CONNECTOR_NAMESPACE);
+}
+
+/**
+ * Normalize the `/wp/v2/types` response (an object keyed by type name) into a list.
+ * Skips entries without a string `rest_base` (not addressable over REST).
+ */
+export function normalizePostTypes(raw: unknown): WpPostType[] {
+  if (typeof raw !== 'object' || raw === null) {
+    return [];
+  }
+  const result: WpPostType[] = [];
+  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (typeof value !== 'object' || value === null) {
+      continue;
+    }
+    const entry = value as Record<string, unknown>;
+    // Validate rest_base at ingestion so a malformed slug can't become a broken option.
+    if (typeof entry.rest_base !== 'string' || !ROUTE_SEGMENT.test(entry.rest_base)) {
+      continue;
+    }
+    result.push({
+      slug: typeof entry.slug === 'string' ? entry.slug : key,
+      restBase: entry.rest_base,
+      name: typeof entry.name === 'string' ? entry.name : key,
+    });
+  }
+  return result;
 }
 
 function normalizePost(raw: WpPostResponse): WpPost {

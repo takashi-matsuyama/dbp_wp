@@ -1,7 +1,13 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import type { WpPost } from '@dbp-wp/core';
-  import { disconnect, fetchPosts, getConnection, type ConnectionStatus } from './lib/api';
+  import type { WpPost, WpPostType } from '@dbp-wp/core';
+  import {
+    disconnect,
+    fetchPosts,
+    fetchTypes,
+    getConnection,
+    type ConnectionStatus,
+  } from './lib/api';
   import ConnectionPanel from './lib/views/ConnectionPanel.svelte';
   import TableView from './lib/views/TableView.svelte';
   import SpreadsheetView from './lib/views/SpreadsheetView.svelte';
@@ -11,6 +17,8 @@
   let tab = $state<Tab>('table');
   let connection = $state<ConnectionStatus>({ connected: false, siteUrl: null, connectorAvailable: false });
   let posts = $state<WpPost[]>([]);
+  let postTypes = $state<WpPostType[]>([]);
+  let selectedType = $state('posts');
   let loading = $state(true);
   let error = $state<string | null>(null);
 
@@ -20,22 +28,41 @@
     try {
       connection = await getConnection();
       if (connection.connected) {
-        const res = await fetchPosts();
+        if (postTypes.length === 0) {
+          try {
+            postTypes = await fetchTypes();
+          } catch {
+            // Non-fatal: the type selector just stays hidden, defaulting to posts.
+          }
+        }
+        const res = await fetchPosts({ type: selectedType });
         if (res.unconfigured) {
           // Credentials disappeared between the checks; reflect the real state.
           connection = { connected: false, siteUrl: null, connectorAvailable: false };
           posts = [];
+          postTypes = [];
+          selectedType = 'posts';
         } else {
           posts = res.posts;
         }
       } else {
         posts = [];
+        postTypes = [];
+        selectedType = 'posts';
       }
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
     } finally {
       loading = false;
     }
+  }
+
+  async function changeType(next: string): Promise<void> {
+    if (next === selectedType) {
+      return;
+    }
+    selectedType = next;
+    await refresh();
   }
 
   async function onDisconnect(): Promise<void> {
@@ -61,6 +88,20 @@
         Spreadsheet
       </button>
     </nav>
+    {#if postTypes.length > 0}
+      <label class="type-select">
+        Type
+        <select
+          value={selectedType}
+          disabled={loading}
+          onchange={(e) => changeType((e.currentTarget as HTMLSelectElement).value)}
+        >
+          {#each postTypes as pt (pt.restBase)}
+            <option value={pt.restBase}>{pt.name}</option>
+          {/each}
+        </select>
+      </label>
+    {/if}
     <span class="conn">
       {connection.siteUrl}
       <span class="connector-badge" class:restricted={!connection.connectorAvailable}>
@@ -82,6 +123,13 @@
   {:else if tab === 'table'}
     <TableView {posts} />
   {:else}
-    <SpreadsheetView {posts} connectorAvailable={connection.connectorAvailable} onsaved={refresh} />
+    {#key selectedType}
+      <SpreadsheetView
+        {posts}
+        type={selectedType}
+        connectorAvailable={connection.connectorAvailable}
+        onsaved={refresh}
+      />
+    {/key}
   {/if}
 </main>

@@ -67,6 +67,16 @@ export interface UpdatePostFields {
   status?: string;
 }
 
+/** A WordPress post type available for listing/editing over REST. */
+export interface WpPostType {
+  /** Internal type slug (e.g. `post`). */
+  slug: string;
+  /** REST route base used to list/update items of this type (e.g. `posts`). */
+  restBase: string;
+  /** Human-readable name (e.g. `Posts`). */
+  name: string;
+}
+
 /** Result of a per-post meta delete via the companion plugin. */
 export interface DeleteMetaResult {
   /** The post the keys were deleted from. */

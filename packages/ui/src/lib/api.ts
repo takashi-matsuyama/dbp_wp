@@ -1,4 +1,4 @@
-import type { WpPost } from '@dbp-wp/core';
+import type { WpPost, WpPostType } from '@dbp-wp/core';
 
 // The UI talks only to the local CLI server (`/api/...`), never to WordPress directly,
 // so the browser never holds credentials and is not subject to cross-origin rules.
@@ -33,6 +33,16 @@ export async function fetchPosts(query: ListPostsQuery = {}): Promise<PostsRespo
     throw new Error(`Failed to load posts: ${res.status}`);
   }
   return (await res.json()) as PostsResponse;
+}
+
+/** Fetch the site's REST-enabled post types from the CLI (for the type selector). */
+export async function fetchTypes(): Promise<WpPostType[]> {
+  const res = await fetch('/api/types');
+  if (!res.ok) {
+    throw new Error(`Failed to load post types: ${res.status}`);
+  }
+  const data = (await res.json()) as { types?: WpPostType[] };
+  return data.types ?? [];
 }
 
 export interface ConnectionStatus {
@@ -108,12 +118,15 @@ export interface UpdateResult {
   error?: string;
 }
 
-/** Send a batch of post edits to the CLI, which applies them over the WordPress REST API. */
-export async function savePosts(updates: PostUpdate[]): Promise<UpdateResult[]> {
+/**
+ * Send a batch of post edits to the CLI, which applies them over the WordPress REST API.
+ * `type` is the REST route base of the post type being edited (defaults to `posts`).
+ */
+export async function savePosts(updates: PostUpdate[], type = 'posts'): Promise<UpdateResult[]> {
   const res = await fetch('/api/posts/batch', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ updates }),
+    body: JSON.stringify({ type, updates }),
   });
   const data = (await res.json().catch(() => ({}))) as { results?: UpdateResult[]; error?: string };
   if (!res.ok) {

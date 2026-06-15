@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { parseBatchUpdates, parseBulkMetaDelete, parseMetaDelete } from './updates';
+import {
+  parseBatchUpdates,
+  parseBulkMetaDelete,
+  parseMetaDelete,
+  parsePostTypeSlug,
+} from './updates';
 
 describe('parseBatchUpdates', () => {
   it('parses valid updates with editable fields', () => {
@@ -119,5 +124,23 @@ describe('parseBulkMetaDelete', () => {
     expect(parseBulkMetaDelete({ deletes: 'x' })).toBeNull();
     expect(parseBulkMetaDelete({ deletes: [{ id: 1, keys: ['price'] }, { id: 0, keys: ['x'] }] })).toBeNull();
     expect(parseBulkMetaDelete(null)).toBeNull();
+  });
+});
+
+describe('parsePostTypeSlug', () => {
+  it('defaults to posts when absent and accepts valid slugs', () => {
+    expect(parsePostTypeSlug(undefined)).toBe('posts');
+    expect(parsePostTypeSlug('pages')).toBe('pages');
+    expect(parsePostTypeSlug('my_cpt-2')).toBe('my_cpt-2');
+  });
+
+  it('rejects a non-string or malformed slug, including dot path segments', () => {
+    expect(parsePostTypeSlug('')).toBeNull();
+    expect(parsePostTypeSlug('bad slug')).toBeNull();
+    expect(parsePostTypeSlug('a/b')).toBeNull();
+    expect(parsePostTypeSlug('.')).toBeNull();
+    expect(parsePostTypeSlug('..')).toBeNull();
+    expect(parsePostTypeSlug('a.b')).toBeNull();
+    expect(parsePostTypeSlug(5)).toBeNull();
   });
 });

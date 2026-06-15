@@ -11,6 +11,24 @@ export interface BatchUpdate {
 /** Maximum updates accepted in one batch request. */
 export const MAX_UPDATES = 500;
 
+/** Allowed characters for a REST post-type route slug. No dots: a `.`/`..` segment
+ *  would be resolved by the URL parser and traverse the REST path. */
+const ROUTE_SLUG = /^[a-z0-9_-]+$/i;
+
+/**
+ * Validate an optional REST post-type slug from a request body. Returns the default
+ * `posts` when absent, the slug when valid, or null when present but malformed.
+ */
+export function parsePostTypeSlug(value: unknown): string | null {
+  if (value === undefined) {
+    return 'posts';
+  }
+  if (typeof value !== 'string' || !ROUTE_SLUG.test(value)) {
+    return null;
+  }
+  return value;
+}
+
 // WordPress stores menu_order in a signed 32-bit column; reject values outside that range.
 const MENU_ORDER_MIN = -2_147_483_648;
 const MENU_ORDER_MAX = 2_147_483_647;
