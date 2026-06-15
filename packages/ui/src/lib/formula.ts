@@ -9,6 +9,10 @@ const engine = new SafeFormulaEngine();
 const MENU_ORDER_MIN = -2_147_483_648;
 const MENU_ORDER_MAX = 2_147_483_647;
 
+// Bound the work a single formula apply can trigger (defensive against pathological input).
+const MAX_FORMULA_LENGTH = 1000;
+const MAX_ROWS = 10_000;
+
 /**
  * Evaluate a menu_order formula for each post, in display order. Returns a map of post id
  * to the rounded integer result. The per-row context exposes `index` (1-based position),
@@ -17,6 +21,12 @@ const MENU_ORDER_MAX = 2_147_483_647;
  * or any result falls outside the menu_order range.
  */
 export function computeMenuOrders(posts: WpPost[], formula: string): Map<number, number> {
+  if (formula.length > MAX_FORMULA_LENGTH) {
+    throw new Error(`Formula is too long (max ${MAX_FORMULA_LENGTH} characters).`);
+  }
+  if (posts.length > MAX_ROWS) {
+    throw new Error(`Too many rows for one formula (max ${MAX_ROWS}).`);
+  }
   const result = new Map<number, number>();
   posts.forEach((post, i) => {
     const value = engine.evaluate(formula, {

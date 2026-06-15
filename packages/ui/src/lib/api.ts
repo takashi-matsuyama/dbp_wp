@@ -32,7 +32,11 @@ export async function fetchPosts(query: ListPostsQuery = {}): Promise<PostsRespo
   if (!res.ok) {
     throw new Error(`Failed to load posts: ${res.status}`);
   }
-  return (await res.json()) as PostsResponse;
+  const data = (await res.json()) as Partial<PostsResponse>;
+  return {
+    posts: Array.isArray(data.posts) ? data.posts : [],
+    unconfigured: data.unconfigured === true,
+  };
 }
 
 /** Fetch the site's REST-enabled post types from the CLI (for the type selector). */
@@ -41,8 +45,8 @@ export async function fetchTypes(): Promise<WpPostType[]> {
   if (!res.ok) {
     throw new Error(`Failed to load post types: ${res.status}`);
   }
-  const data = (await res.json()) as { types?: WpPostType[] };
-  return data.types ?? [];
+  const data = (await res.json()) as { types?: unknown };
+  return Array.isArray(data.types) ? (data.types as WpPostType[]) : [];
 }
 
 export interface ConnectionStatus {
@@ -66,9 +70,9 @@ export async function getConnection(): Promise<ConnectionStatus> {
   }
   const data = (await res.json()) as Partial<ConnectionStatus>;
   return {
-    connected: data.connected ?? false,
-    siteUrl: data.siteUrl ?? null,
-    connectorAvailable: data.connectorAvailable ?? false,
+    connected: data.connected === true,
+    siteUrl: typeof data.siteUrl === 'string' ? data.siteUrl : null,
+    connectorAvailable: data.connectorAvailable === true,
   };
 }
 
@@ -132,7 +136,7 @@ export async function savePosts(updates: PostUpdate[], type = 'posts'): Promise<
   if (!res.ok) {
     throw new Error(data.error ?? `Save failed: ${res.status}`);
   }
-  return data.results ?? [];
+  return Array.isArray(data.results) ? data.results : [];
 }
 
 /** A per-post meta deletion (delete the named keys from one post). */
@@ -152,5 +156,5 @@ export async function bulkDeleteMeta(deletes: MetaDeletion[]): Promise<UpdateRes
   if (!res.ok) {
     throw new Error(data.error ?? `Bulk delete failed: ${res.status}`);
   }
-  return data.results ?? [];
+  return Array.isArray(data.results) ? data.results : [];
 }

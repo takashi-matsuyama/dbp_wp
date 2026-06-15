@@ -38,12 +38,13 @@ export function parseCredentialsInput(body: unknown): WpCredentials | null {
 
 /** Resolve the server port from the environment, falling back to {@link DEFAULT_PORT}. */
 export function readPort(env: NodeJS.ProcessEnv = process.env): number {
-  const raw = env.DBP_WP_CLI_PORT;
-  if (!raw) {
+  const raw = env.DBP_WP_CLI_PORT?.trim();
+  // Digits only: Number.parseInt would otherwise accept values like "3000x" as 3000.
+  if (!raw || !/^\d+$/.test(raw)) {
     return DEFAULT_PORT;
   }
   const port = Number.parseInt(raw, 10);
-  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+  if (port < 1 || port > 65535) {
     return DEFAULT_PORT;
   }
   return port;

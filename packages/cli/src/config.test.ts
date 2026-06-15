@@ -26,10 +26,13 @@ describe('readPort', () => {
     expect(readPort({ DBP_WP_CLI_PORT: 'abc' })).toBe(DEFAULT_PORT);
     expect(readPort({ DBP_WP_CLI_PORT: '0' })).toBe(DEFAULT_PORT);
     expect(readPort({ DBP_WP_CLI_PORT: '99999' })).toBe(DEFAULT_PORT);
+    expect(readPort({ DBP_WP_CLI_PORT: '3000x' })).toBe(DEFAULT_PORT);
+    expect(readPort({ DBP_WP_CLI_PORT: '80.5' })).toBe(DEFAULT_PORT);
   });
 
-  it('uses a valid port', () => {
+  it('uses a valid port, trimming surrounding whitespace', () => {
     expect(readPort({ DBP_WP_CLI_PORT: '8080' })).toBe(8080);
+    expect(readPort({ DBP_WP_CLI_PORT: ' 8080 ' })).toBe(8080);
   });
 });
 

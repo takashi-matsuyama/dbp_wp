@@ -29,4 +29,8 @@ describe('computeMenuOrders', () => {
   it('throws when a result is out of the menu_order range', () => {
     expect(() => computeMenuOrders([post(1, 0)], '3000000000')).toThrow(/out of range/);
   });
+
+  it('rejects an over-long formula before evaluating', () => {
+    expect(() => computeMenuOrders(posts, `1 + ${'0'.repeat(1001)}`)).toThrow(/too long/i);
+  });
 });

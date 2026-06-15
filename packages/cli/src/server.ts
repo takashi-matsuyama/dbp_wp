@@ -358,7 +358,13 @@ async function handleConnection(
       // Probe the connection so bad credentials fail here, not on first use.
       await client.listPosts({ perPage: 1 });
     } catch (e) {
-      sendJson(res, 502, { error: e instanceof Error ? e.message : 'Connection failed' });
+      // Return a fixed message rather than echoing raw upstream details.
+      const status = e instanceof WpRequestError ? e.status : 0;
+      const message =
+        status === 401 || status === 403
+          ? 'Authentication failed. Check the username and Application Password.'
+          : 'Could not connect to the WordPress REST API. Check the site URL.';
+      sendJson(res, 502, { error: message });
       return;
     }
     options.state.credentials = credentials;
