@@ -139,6 +139,43 @@ export async function savePosts(updates: PostUpdate[], type = 'posts'): Promise<
   return Array.isArray(data.results) ? data.results : [];
 }
 
+/** A single new post to create on import (flattened standard fields plus optional meta). */
+export interface ImportCreateInput {
+  title?: string;
+  menuOrder?: number;
+  status?: string;
+  /** Arbitrary meta to write via the companion plugin (full mode only). */
+  meta?: Record<string, unknown>;
+}
+
+/** Result of creating one imported post (no input id; the new id comes back on success). */
+export interface ImportResult {
+  index: number;
+  ok: boolean;
+  id?: number;
+  error?: string;
+}
+
+/**
+ * Create a batch of new posts from imported rows. `type` is the REST route base of the
+ * target post type (defaults to `posts`). Returns a per-row result with the new id.
+ */
+export async function importPosts(
+  creates: ImportCreateInput[],
+  type = 'posts',
+): Promise<ImportResult[]> {
+  const res = await fetch('/api/posts/import', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ type, creates }),
+  });
+  const data = (await res.json().catch(() => ({}))) as { results?: ImportResult[]; error?: string };
+  if (!res.ok) {
+    throw new Error(data.error ?? `Import failed: ${res.status}`);
+  }
+  return Array.isArray(data.results) ? data.results : [];
+}
+
 /** A per-post meta deletion (delete the named keys from one post). */
 export interface MetaDeletion {
   id: number;

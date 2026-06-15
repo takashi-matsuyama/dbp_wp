@@ -34,6 +34,58 @@ const MENU_ORDER_MIN = -2_147_483_648;
 const MENU_ORDER_MAX = 2_147_483_647;
 
 /**
+ * Parse the three editable standard fields (title / menuOrder / status) from a record.
+ * Returns a (possibly empty) fields object, or null if a present field has the wrong
+ * type or `menuOrder` falls outside the signed 32-bit range. The caller decides whether
+ * an empty result (no fields set) is acceptable.
+ */
+function parseEditableFields(record: Record<string, unknown>): UpdatePostFields | null {
+  const fields: UpdatePostFields = {};
+  if (record.title !== undefined) {
+    if (typeof record.title !== 'string') {
+      return null;
+    }
+    fields.title = record.title;
+  }
+  if (record.menuOrder !== undefined) {
+    if (
+      typeof record.menuOrder !== 'number' ||
+      !Number.isInteger(record.menuOrder) ||
+      record.menuOrder < MENU_ORDER_MIN ||
+      record.menuOrder > MENU_ORDER_MAX
+    ) {
+      return null;
+    }
+    fields.menuOrder = record.menuOrder;
+  }
+  if (record.status !== undefined) {
+    if (typeof record.status !== 'string') {
+      return null;
+    }
+    fields.status = record.status;
+  }
+  return fields;
+}
+
+/**
+ * Parse optional meta from a record. Returns `undefined` when absent or empty, the
+ * cleaned meta map when present, or null when malformed. Distinguishes "no meta" from
+ * "invalid meta" via the `ok` flag so callers can reject the latter.
+ */
+function parseOptionalMeta(
+  record: Record<string, unknown>,
+): { ok: true; meta: Record<string, unknown> | undefined } | { ok: false } {
+  if (record.meta === undefined) {
+    return { ok: true, meta: undefined };
+  }
+  const parsedMeta = parseMetaInput(record.meta);
+  if (parsedMeta === null) {
+    return { ok: false };
+  }
+  return { ok: true, meta: Object.keys(parsedMeta).length > 0 ? parsedMeta : undefined };
+}
+
+/**
  * Validate a batch-update payload from untrusted input. Returns null on any malformed
  * item, empty list, or oversized batch. Each item must have a positive integer `id`
  * and at least one editable field (title / menuOrder / status) of the right type.
@@ -57,46 +109,65 @@ export function parseBatchUpdates(body: unknown): BatchUpdate[] | null {
       return null;
     }
 
-    const fields: UpdatePostFields = {};
-    if (record.title !== undefined) {
-      if (typeof record.title !== 'string') {
-        return null;
-      }
-      fields.title = record.title;
-    }
-    if (record.menuOrder !== undefined) {
-      if (
-        typeof record.menuOrder !== 'number' ||
-        !Number.isInteger(record.menuOrder) ||
-        record.menuOrder < MENU_ORDER_MIN ||
-        record.menuOrder > MENU_ORDER_MAX
-      ) {
-        return null;
-      }
-      fields.menuOrder = record.menuOrder;
-    }
-    if (record.status !== undefined) {
-      if (typeof record.status !== 'string') {
-        return null;
-      }
-      fields.status = record.status;
-    }
-
-    let meta: Record<string, unknown> | undefined;
-    if (record.meta !== undefined) {
-      const parsedMeta = parseMetaInput(record.meta);
-      if (parsedMeta === null) {
-        return null;
-      }
-      if (Object.keys(parsedMeta).length > 0) {
-        meta = parsedMeta;
-      }
-    }
-
-    if (Object.keys(fields).length === 0 && meta === undefined) {
+    const fields = parseEditableFields(record);
+    if (fields === null) {
       return null;
     }
-    result.push(meta !== undefined ? { id: record.id, fields, meta } : { id: record.id, fields });
+    const meta = parseOptionalMeta(record);
+    if (!meta.ok) {
+      return null;
+    }
+
+    if (Object.keys(fields).length === 0 && meta.meta === undefined) {
+      return null;
+    }
+    result.push(
+      meta.meta !== undefined ? { id: record.id, fields, meta: meta.meta } : { id: record.id, fields },
+    );
+  }
+  return result;
+}
+
+/** A single validated new-post creation parsed from an import request. */
+export interface ImportCreate {
+  fields: UpdatePostFields;
+  /** Arbitrary meta to write via the companion plugin (omitted when none/empty). */
+  meta?: Record<string, unknown>;
+}
+
+/**
+ * Validate an import payload (`{ creates: [{ title?, menuOrder?, status?, meta? }] }`)
+ * from untrusted input. Returns null on an empty/oversized list or any malformed item.
+ * Unlike a batch update there is no `id` (these are new posts), but each item must still
+ * carry at least one field or meta entry so it does not create a blank post.
+ */
+export function parseImportCreates(body: unknown): ImportCreate[] | null {
+  if (typeof body !== 'object' || body === null) {
+    return null;
+  }
+  const creates = (body as Record<string, unknown>).creates;
+  if (!Array.isArray(creates) || creates.length === 0 || creates.length > MAX_UPDATES) {
+    return null;
+  }
+
+  const result: ImportCreate[] = [];
+  for (const item of creates) {
+    if (typeof item !== 'object' || item === null) {
+      return null;
+    }
+    const record = item as Record<string, unknown>;
+    const fields = parseEditableFields(record);
+    if (fields === null) {
+      return null;
+    }
+    const meta = parseOptionalMeta(record);
+    if (!meta.ok) {
+      return null;
+    }
+    if (Object.keys(fields).length === 0 && meta.meta === undefined) {
+      return null;
+    }
+    result.push(meta.meta !== undefined ? { fields, meta: meta.meta } : { fields });
   }
   return result;
 }

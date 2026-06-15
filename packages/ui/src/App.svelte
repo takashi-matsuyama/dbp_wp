@@ -11,8 +11,9 @@
   import ConnectionPanel from './lib/views/ConnectionPanel.svelte';
   import TableView from './lib/views/TableView.svelte';
   import SpreadsheetView from './lib/views/SpreadsheetView.svelte';
+  import ImportView from './lib/views/ImportView.svelte';
 
-  type Tab = 'table' | 'spreadsheet';
+  type Tab = 'table' | 'spreadsheet' | 'import';
 
   let tab = $state<Tab>('table');
   let connection = $state<ConnectionStatus>({ connected: false, siteUrl: null, connectorAvailable: false });
@@ -87,6 +88,7 @@
       <button class:active={tab === 'spreadsheet'} onclick={() => (tab = 'spreadsheet')}>
         Spreadsheet
       </button>
+      <button class:active={tab === 'import'} onclick={() => (tab = 'import')}>Import</button>
     </nav>
     {#if postTypes.length > 0}
       <label class="type-select">
@@ -122,13 +124,21 @@
     <ConnectionPanel onconnected={refresh} />
   {:else if tab === 'table'}
     <TableView {posts} />
-  {:else}
+  {:else if tab === 'spreadsheet'}
     {#key selectedType}
       <SpreadsheetView
         {posts}
         type={selectedType}
         connectorAvailable={connection.connectorAvailable}
         onsaved={refresh}
+      />
+    {/key}
+  {:else}
+    {#key selectedType}
+      <ImportView
+        type={selectedType}
+        connectorAvailable={connection.connectorAvailable}
+        onimported={refresh}
       />
     {/key}
   {/if}

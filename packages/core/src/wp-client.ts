@@ -157,6 +157,25 @@ export class WpClient {
   }
 
   /**
+   * Create a new post in a single request, symmetric to {@link WpClient.updatePost}.
+   * Standard fields (title, menu_order, status) are core REST fields; when `meta` is
+   * supplied it rides the same request through the companion plugin's `dbp_wp_meta`
+   * field. Pass the REST route slug as `type` (e.g. `posts`, `pages`).
+   */
+  async createPost(
+    fields: UpdatePostFields,
+    type = 'posts',
+    meta?: Record<string, unknown>,
+  ): Promise<WpPost> {
+    assertRouteSegment(type);
+    const raw = await this.request<WpPostResponse>(`/wp/v2/${type}?context=edit`, {
+      method: 'POST',
+      body: JSON.stringify(buildPostBody(fields, meta)),
+    });
+    return normalizePost(raw);
+  }
+
+  /**
    * Update only arbitrary post meta through the companion plugin's `dbp_wp_meta`
    * field. A thin wrapper over {@link WpClient.updatePost} with no standard fields.
    * Requires the connector; the connector writes scalar values only.

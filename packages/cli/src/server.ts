@@ -8,6 +8,7 @@ import { isAllowedHost, isCrossSiteRequest, isJsonContentType } from './host';
 import {
   parseBatchUpdates,
   parseBulkMetaDelete,
+  parseImportCreates,
   parseMetaDelete,
   parsePostTypeSlug,
 } from './updates';
@@ -188,6 +189,62 @@ async function handlePostsBatch(
       results.push({ id: update.id, ok: true });
     } catch (e) {
       results.push({ id: update.id, ok: false, error: e instanceof Error ? e.message : 'Update failed' });
+    }
+  }
+  sendJson(res, 200, { results });
+}
+
+async function handlePostsImport(
+  req: IncomingMessage,
+  res: ServerResponse,
+  options: ServerOptions,
+): Promise<void> {
+  if (req.method !== 'POST') {
+    sendJson(res, 405, { error: 'Method not allowed' });
+    return;
+  }
+  if (!isJsonContentType(req.headers['content-type'])) {
+    sendJson(res, 415, { error: 'Content-Type must be application/json.' });
+    return;
+  }
+  const credentials = options.state.credentials;
+  if (!credentials) {
+    sendJson(res, 409, { error: 'Not connected' });
+    return;
+  }
+
+  let body: unknown;
+  try {
+    body = await readJsonBody(req);
+  } catch (e) {
+    sendJson(res, 400, { error: e instanceof Error ? e.message : 'Invalid request body' });
+    return;
+  }
+  const creates = parseImportCreates(body);
+  if (!creates) {
+    sendJson(res, 400, { error: 'Invalid import payload.' });
+    return;
+  }
+  const type = parsePostTypeSlug((body as Record<string, unknown>).type);
+  if (type === null) {
+    sendJson(res, 400, { error: 'Invalid post type.' });
+    return;
+  }
+
+  // Create sequentially; report success/failure per row (with the new id) rather than
+  // failing the whole import. The batch targets one post type (slug from the UI).
+  const client = new WpClient(credentials);
+  const results: Array<{ index: number; ok: boolean; id?: number; error?: string }> = [];
+  for (const [i, create] of creates.entries()) {
+    try {
+      const post = await client.createPost(create.fields, type, create.meta);
+      results.push({ index: i, ok: true, id: post.id });
+    } catch (e) {
+      results.push({
+        index: i,
+        ok: false,
+        error: e instanceof Error ? e.message : 'Create failed',
+      });
     }
   }
   sendJson(res, 200, { results });
@@ -401,6 +458,10 @@ async function handleApiRoutes(
   }
   if (url.pathname === '/api/posts/batch') {
     await handlePostsBatch(req, res, options);
+    return;
+  }
+  if (url.pathname === '/api/posts/import') {
+    await handlePostsImport(req, res, options);
     return;
   }
   if (url.pathname === '/api/posts/meta/bulk') {

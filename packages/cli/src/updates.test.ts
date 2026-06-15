@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   parseBatchUpdates,
   parseBulkMetaDelete,
+  parseImportCreates,
   parseMetaDelete,
   parsePostTypeSlug,
 } from './updates';
@@ -78,6 +79,53 @@ describe('parseBatchUpdates', () => {
   it('keeps a literal __proto__ meta key without polluting the prototype', () => {
     const parsed = parseBatchUpdates(
       JSON.parse('{"updates":[{"id":1,"meta":{"__proto__":"kept","sku":"A1"}}]}'),
+    );
+    expect(parsed).not.toBeNull();
+    const meta = parsed?.[0]?.meta ?? {};
+    expect(Object.keys(meta)).toEqual(expect.arrayContaining(['__proto__', 'sku']));
+    expect(({} as Record<string, unknown>)['kept']).toBeUndefined();
+  });
+});
+
+describe('parseImportCreates', () => {
+  it('parses creates with fields and meta (no id required)', () => {
+    expect(
+      parseImportCreates({
+        creates: [
+          { title: 'New', status: 'draft' },
+          { title: 'With meta', meta: { price: '10', stock: 4 } },
+          { meta: { sku: 'A1' } },
+        ],
+      }),
+    ).toEqual([
+      { fields: { title: 'New', status: 'draft' } },
+      { fields: { title: 'With meta' }, meta: { price: '10', stock: 4 } },
+      { fields: {}, meta: { sku: 'A1' } },
+    ]);
+  });
+
+  it('rejects empty, oversized, or non-array payloads', () => {
+    expect(parseImportCreates({ creates: [] })).toBeNull();
+    expect(parseImportCreates({ creates: 'x' })).toBeNull();
+    expect(parseImportCreates(null)).toBeNull();
+  });
+
+  it('rejects a row with nothing to create (no fields, empty meta)', () => {
+    expect(parseImportCreates({ creates: [{}] })).toBeNull();
+    expect(parseImportCreates({ creates: [{ meta: {} }] })).toBeNull();
+  });
+
+  it('rejects wrong field types, out-of-range menuOrder, and non-scalar meta', () => {
+    expect(parseImportCreates({ creates: [{ title: 5 }] })).toBeNull();
+    expect(parseImportCreates({ creates: [{ menuOrder: 2_147_483_648 }] })).toBeNull();
+    expect(parseImportCreates({ creates: [{ menuOrder: 1.5 }] })).toBeNull();
+    expect(parseImportCreates({ creates: [{ meta: { a: { nested: 1 } } }] })).toBeNull();
+    expect(parseImportCreates({ creates: [{ meta: [1, 2] }] })).toBeNull();
+  });
+
+  it('keeps a literal __proto__ meta key without polluting the prototype', () => {
+    const parsed = parseImportCreates(
+      JSON.parse('{"creates":[{"meta":{"__proto__":"kept","sku":"A1"}}]}'),
     );
     expect(parsed).not.toBeNull();
     const meta = parsed?.[0]?.meta ?? {};
