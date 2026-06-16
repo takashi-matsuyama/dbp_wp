@@ -299,13 +299,12 @@ export class WpClient {
    * user must have `upload_files`. Returns the normalized media item.
    */
   async uploadMedia(bytes: Uint8Array, filename: string, mimeType?: string): Promise<WpMedia> {
-    const name = sanitizeFilename(filename);
     const response = await this.send('/wp/v2/media', {
       method: 'POST',
       body: bytes,
       headers: {
         'Content-Type': mimeType && mimeType.length > 0 ? mimeType : 'application/octet-stream',
-        'Content-Disposition': `attachment; filename="${name}"`,
+        'Content-Disposition': buildContentDisposition(filename),
       },
     });
     return normalizeMedia(await response.json());
@@ -346,12 +345,21 @@ export class WpClient {
     if (clean.length === 0) {
       return [];
     }
-    const query = new URLSearchParams({
-      include: clean.join(','),
-      per_page: String(clampInt(clean.length, 1, 100)),
-    });
-    const raw = await this.request<unknown>(`/wp/v2/media?${query.toString()}`);
-    return Array.isArray(raw) ? raw.map(normalizeMedia) : [];
+    // WordPress caps per_page at 100, so resolve in chunks of 100 — otherwise a request for
+    // more than 100 ids would be silently truncated, leaving the rest unresolved.
+    const out: WpMedia[] = [];
+    for (let i = 0; i < clean.length; i += 100) {
+      const chunk = clean.slice(i, i + 100);
+      const query = new URLSearchParams({
+        include: chunk.join(','),
+        per_page: String(chunk.length),
+      });
+      const raw = await this.request<unknown>(`/wp/v2/media?${query.toString()}`);
+      if (Array.isArray(raw)) {
+        out.push(...raw.map(normalizeMedia));
+      }
+    }
+    return out;
   }
 }
 
@@ -431,12 +439,23 @@ export function hasConnectorNamespace(namespaces: unknown): boolean {
   return Array.isArray(namespaces) && namespaces.includes(CONNECTOR_NAMESPACE);
 }
 
-/** Reduce a filename to its basename and strip characters that could break a header. */
-function sanitizeFilename(name: string): string {
-  const base = name.split(/[/\\]/).pop() ?? name;
-  // Drop quotes and CR/LF so the value cannot break out of the Content-Disposition header.
-  const clean = base.replace(/["\r\n]/g, '').trim();
-  return clean.length > 0 ? clean : 'upload';
+/**
+ * Build a `Content-Disposition` value for a media upload. Emits an ASCII-only
+ * `filename="…"` fallback (non-ASCII and header-unsafe characters replaced with `_`) plus an
+ * RFC 5987 `filename*=UTF-8''…` parameter, so a non-ASCII filename survives and never
+ * produces an invalid (non-ByteString) header value that `fetch` would reject. The path is
+ * reduced to its basename and quotes/CR/LF are dropped so the value cannot break the header.
+ */
+export function buildContentDisposition(filename: string): string {
+  const base = filename.split(/[/\\]/).pop() ?? filename;
+  const trimmed = base.replace(/[\r\n"]/g, '').trim() || 'upload';
+  const ascii = trimmed.replace(/[^\x20-\x7e]/g, '_');
+  // Percent-encode per RFC 5987, also encoding the chars encodeURIComponent leaves bare.
+  const encoded = encodeURIComponent(trimmed).replace(
+    /['()*!]/g,
+    (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`,
+  );
+  return `attachment; filename="${ascii}"; filename*=UTF-8''${encoded}`;
 }
 
 /** Parse the `X-WP-TotalPages` header into a positive page count, defaulting to 1. */

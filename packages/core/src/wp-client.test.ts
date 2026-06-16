@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildAuthHeader,
+  buildContentDisposition,
   buildMetaBody,
   buildPostBody,
   buildUpdateBody,
@@ -239,6 +240,36 @@ describe('normalizePost featured media', () => {
 
   it('leaves featuredMedia unset when the field is absent', () => {
     expect(normalizePost(raw()).featuredMedia).toBeUndefined();
+  });
+});
+
+describe('buildContentDisposition', () => {
+  it('uses the basename and quotes an ASCII filename', () => {
+    expect(buildContentDisposition('photo.png')).toBe(
+      "attachment; filename=\"photo.png\"; filename*=UTF-8''photo.png",
+    );
+    expect(buildContentDisposition('/uploads/sub/img.jpg')).toBe(
+      "attachment; filename=\"img.jpg\"; filename*=UTF-8''img.jpg",
+    );
+  });
+
+  it('keeps a non-ASCII filename in filename* and an ASCII-safe fallback', () => {
+    const value = buildContentDisposition('写真.png');
+    expect(value).toContain('filename="__.png"'); // two non-ASCII chars → two underscores
+    expect(value).toContain("filename*=UTF-8''%E5%86%99%E7%9C%9F.png");
+  });
+
+  it('strips quotes and CR/LF so the header cannot be broken', () => {
+    const value = buildContentDisposition('a"b\r\nc.png');
+    expect(value).not.toContain('"b');
+    expect(value).not.toMatch(/[\r\n]/);
+    expect(value.startsWith('attachment; filename="')).toBe(true);
+  });
+
+  it('falls back to a default when the name is empty after sanitizing', () => {
+    expect(buildContentDisposition('')).toBe(
+      "attachment; filename=\"upload\"; filename*=UTF-8''upload",
+    );
   });
 });
 

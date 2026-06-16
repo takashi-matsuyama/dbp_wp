@@ -15,6 +15,7 @@ export {
   buildAuthHeader,
   normalizeSiteUrl,
   normalizeMedia,
+  buildContentDisposition,
 } from './wp-client';
 export { type FormulaEngine, SafeFormulaEngine } from './calc/index';
 export {

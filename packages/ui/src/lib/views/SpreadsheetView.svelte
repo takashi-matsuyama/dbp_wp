@@ -348,7 +348,11 @@
       }
       mediaUrls = next;
     } catch {
-      // Thumbnails are best-effort; leave unresolved ids without a preview.
+      // Thumbnails are best-effort. Unmark these ids so a later render (refresh/save) can
+      // retry — a transient failure must not lock them out for the component's lifetime.
+      for (const id of ids) {
+        requestedMediaIds.delete(id);
+      }
     }
   }
 
@@ -417,12 +421,17 @@
     }
   }
 
-  // Assign a media item as the target post's featured image (draft) and close the picker.
+  // Assign a media item as a specific post's featured image (draft) and cache its preview.
+  function assignFeatured(targetId: number, media: WpMedia): void {
+    featuredDrafts[targetId] = media.id;
+    mediaUrls = { ...mediaUrls, [media.id]: media.thumbnailUrl || media.sourceUrl };
+    requestedMediaIds.add(media.id);
+  }
+
+  // Pick from the library: assign to the open row and close the picker.
   function selectMedia(media: WpMedia): void {
     if (pickerForPost !== null) {
-      featuredDrafts[pickerForPost] = media.id;
-      mediaUrls = { ...mediaUrls, [media.id]: media.thumbnailUrl || media.sourceUrl };
-      requestedMediaIds.add(media.id);
+      assignFeatured(pickerForPost, media);
     }
     closePicker();
   }
@@ -433,11 +442,20 @@
     if (!file) {
       return;
     }
+    // Capture the target row before awaiting: the user could reopen the picker on another
+    // row mid-upload, and the new media must land on the row it was uploaded for.
+    const targetId = pickerForPost;
     uploading = true;
     mediaError = null;
     try {
       const media = await uploadMedia(file);
-      selectMedia(media); // upload immediately assigns it (draft) and closes the picker
+      if (targetId !== null) {
+        assignFeatured(targetId, media);
+      }
+      // Close only if the picker is still on the row we uploaded for.
+      if (pickerForPost === targetId) {
+        closePicker();
+      }
     } catch (e) {
       mediaError = e instanceof Error ? e.message : String(e);
     } finally {
@@ -1034,8 +1052,22 @@
     padding: 0.2rem 0.5rem;
     font-size: 0.85rem;
   }
+  /* Visually hidden but still keyboard-focusable (display:none would drop it from the tab
+     order, so keyboard users could not trigger upload). :focus-within shows the focus ring. */
   .picker-upload input[type='file'] {
-    display: none;
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
+  .picker-upload:focus-within {
+    outline: 2px solid #2563eb;
+    outline-offset: 1px;
   }
   .picker-close {
     margin-left: auto;
