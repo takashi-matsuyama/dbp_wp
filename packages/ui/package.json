@@ -28,6 +28,7 @@
     "dev": "vite",
     "build": "vite build",
     "build:demo": "vite build --config vite.demo.config.ts",
+    "seed:demo": "node scripts/build-demo-seed.mjs",
     "preview": "vite preview",
     "typecheck": "svelte-check --tsconfig ./tsconfig.json"
   },

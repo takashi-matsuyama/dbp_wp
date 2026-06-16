@@ -275,6 +275,37 @@
     }
   }
 
+  // Show a parent as its title when resolvable: a same-type parent comes from the loaded
+  // grid; a cross-type parent comes from the candidate cache (loaded by the effect below).
+  // Falls back to "Type #id" while loading or if the parent is not among the fetched posts.
+  function parentLabel(post: WpPost): string {
+    const rel = getRelation(post);
+    if (!rel) {
+      return '';
+    }
+    const typeName = postTypes.find((pt) => pt.restBase === rel.parentType)?.name ?? rel.parentType;
+    const title =
+      rel.parentType === type
+        ? posts.find((p) => p.id === rel.parentId)?.title
+        : relCandidates[rel.parentType]?.find((c) => c.id === rel.parentId)?.title;
+    return title ? `${typeName}: ${title}` : `${typeName} #${rel.parentId}`;
+  }
+
+  // Pre-load the posts of any cross-type parent present in the grid so parentLabel can show
+  // their titles (each type fetched once into the candidate cache).
+  $effect(() => {
+    const parentTypes = new Set<string>();
+    for (const post of posts) {
+      const rel = getRelation(post);
+      if (rel && rel.parentType !== type) {
+        parentTypes.add(rel.parentType);
+      }
+    }
+    for (const parentType of parentTypes) {
+      void ensureCandidates(parentType);
+    }
+  });
+
   function isChanged(post: WpPost): boolean {
     const draft = drafts[post.id];
     const fieldChanged =
@@ -515,7 +546,7 @@
                   {#if relError}<span class="error">{relError}</span>{/if}
                 </div>
               {:else if getRelation(post)}
-                <span class="parent-ref">{getRelation(post)?.parentType} #{getRelation(post)?.parentId}</span>
+                <span class="parent-ref">{parentLabel(post)}</span>
                 <button
                   class="rel-edit"
                   onclick={() => openRelationEditor(post)}

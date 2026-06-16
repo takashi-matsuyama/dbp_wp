@@ -6,8 +6,15 @@ import tseslint from 'typescript-eslint';
 export default tseslint.config(
   {
     // Build output (dist = app/lib build, demo-dist = browser-demo bundle) is generated,
-    // not source; never lint it.
-    ignores: ['**/dist/**', '**/demo-dist/**', '**/node_modules/**', '**/*.config.{js,ts}'],
+    // not source; never lint it. `scripts/` holds Node build tooling (e.g. the demo-seed
+    // generator), not app/library source, so it is excluded like the config files are.
+    ignores: [
+      '**/dist/**',
+      '**/demo-dist/**',
+      '**/node_modules/**',
+      '**/scripts/**',
+      '**/*.config.{js,ts}',
+    ],
   },
   eslint.configs.recommended,
   ...tseslint.configs.recommended,

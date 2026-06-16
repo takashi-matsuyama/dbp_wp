@@ -11,12 +11,12 @@
     connectorAvailable: boolean;
   } = $props();
 
-  const DEFAULT_TEMPLATE = `<article>
+  const STANDARD_TEMPLATE = `<article>
   <h2>{{ title }}</h2>
   {{{ excerpt }}}
 </article>`;
 
-  const DEFAULT_CSS = `article {
+  const STANDARD_CSS = `article {
   border: 1px solid #ccc;
   padding: 8mm;
   font-family: serif;
@@ -25,6 +25,55 @@ h2 {
   margin: 0 0 4mm;
   font-size: 14pt;
 }`;
+
+  // The browser demo ships World Bank country data with flags, so it starts from a template
+  // that showcases the flag (featured image) and a few indicators. The real product keeps
+  // the minimal default; both are just editable starting points.
+  const DEMO_TEMPLATE = `<article>
+  <img class="flag" src="{{ featuredImageUrl }}" alt="{{ title }} flag" />
+  <h2>{{ title }}</h2>
+  <dl>
+    <dt>Capital</dt><dd>{{ meta.capital }}</dd>
+    <dt>Region</dt><dd>{{ meta.region }}</dd>
+    <dt>Population</dt><dd>{{ meta.population }}</dd>
+    <dt>GDP (US$)</dt><dd>{{ meta.gdp_usd }}</dd>
+    <dt>GDP per capita (US$)</dt><dd>{{ meta.gdp_per_capita_usd }}</dd>
+  </dl>
+</article>`;
+
+  const DEMO_CSS = `article {
+  border: 1px solid #ccc;
+  padding: 8mm;
+  font-family: serif;
+  break-inside: avoid;
+}
+.flag {
+  width: 32mm;
+  height: auto;
+  border: 1px solid #ddd;
+  float: right;
+}
+h2 {
+  margin: 0 0 4mm;
+  font-size: 14pt;
+}
+dl {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 1mm 4mm;
+  margin: 0;
+  font-size: 10pt;
+}
+dt {
+  font-weight: bold;
+}
+dd {
+  margin: 0;
+}`;
+
+  const isDemo = import.meta.env.VITE_DBP_DEMO === 'true';
+  const DEFAULT_TEMPLATE = isDemo ? DEMO_TEMPLATE : STANDARD_TEMPLATE;
+  const DEFAULT_CSS = isDemo ? DEMO_CSS : STANDARD_CSS;
 
   let records = $state<PrintRecord[]>([]);
   let loading = $state(true);
