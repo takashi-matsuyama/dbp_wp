@@ -3,7 +3,7 @@
  * Plugin Name:       DBP WP Connector
  * Plugin URI:        https://github.com/takashi-matsuyama/dbp_wp
  * Description:       Optional companion for the DBP WP app: exposes arbitrary post meta over the REST API (read/write) and per-post meta deletion by key. Authentication is delegated entirely to WordPress core Application Passwords and capability checks; the plugin adds no authentication of its own.
- * Version:           0.1.0
+ * Version:           0.2.0
  * Requires at least: 5.6
  * Requires PHP:      7.4
  * Author:            caronima
