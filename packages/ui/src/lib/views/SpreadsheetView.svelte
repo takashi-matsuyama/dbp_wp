@@ -306,6 +306,71 @@
     }
   });
 
+  // --- Drag-and-drop reorder (→ menu_order) ---
+  // `rowOrder` is the dragged display order (post ids); it is used only while it is a valid
+  // permutation of the loaded posts, otherwise the grid falls back to the posts' own order
+  // (so a refresh or type switch resets cleanly, no effect needed). On drop the order is
+  // written into the menu_order drafts (1-based) and rides the existing batch Save.
+  let rowOrder = $state<number[]>([]);
+  let dragId = $state<number | null>(null);
+
+  const postById = $derived(new Map(posts.map((p) => [p.id, p])));
+
+  const displayOrder = $derived.by(() => {
+    const ids = posts.map((p) => p.id);
+    const valid = rowOrder.length === ids.length && ids.every((id) => rowOrder.includes(id));
+    return valid ? rowOrder : ids;
+  });
+
+  function moveInOrder(fromId: number, toId: number): void {
+    if (fromId === toId) {
+      return;
+    }
+    const next = [...rowOrder];
+    const from = next.indexOf(fromId);
+    const to = next.indexOf(toId);
+    if (from < 0 || to < 0) {
+      return;
+    }
+    next.splice(from, 1);
+    next.splice(to, 0, fromId);
+    rowOrder = next;
+  }
+
+  function startRowDrag(id: number): void {
+    rowOrder = displayOrder.slice(); // snapshot the current order before dragging
+    dragId = id;
+  }
+
+  function dragRowOver(event: DragEvent, targetId: number): void {
+    if (dragId === null) {
+      return;
+    }
+    event.preventDefault(); // allow drop + reorder live as the row is dragged over others
+    moveInOrder(dragId, targetId);
+  }
+
+  // Write the final order into the menu_order drafts (1-based). Rows whose position changed
+  // become "changed" and ride the existing Save; rows already at their number stay untouched.
+  function endRowDrag(): void {
+    if (dragId === null) {
+      return;
+    }
+    const next = { ...drafts };
+    displayOrder.forEach((id, index) => {
+      const post = postById.get(id);
+      if (!post) {
+        return;
+      }
+      next[id] = {
+        ...(next[id] ?? { title: post.title, menuOrder: post.menuOrder }),
+        menuOrder: index + 1,
+      };
+    });
+    drafts = next;
+    dragId = null;
+  }
+
   function isChanged(post: WpPost): boolean {
     const draft = drafts[post.id];
     const fieldChanged =
@@ -450,6 +515,7 @@
   <table class="sheet">
     <thead>
       <tr>
+        <th class="drag-col" aria-hidden="true"></th>
         <th>ID</th>
         <th>Title</th>
         <th>Menu order</th>
@@ -488,8 +554,21 @@
       </tr>
     </thead>
     <tbody>
-      {#each posts as post (post.id)}
-        <tr class:changed={isChanged(post)}>
+      {#each displayOrder as id (id)}
+        {@const post = postById.get(id)}
+        {#if post}
+          <tr
+            class:changed={isChanged(post)}
+            class:dragging={dragId === post.id}
+            ondragover={(e) => dragRowOver(e, post.id)}
+            ondrop={(e) => e.preventDefault()}
+          >
+            <td
+              class="drag-handle"
+              draggable={!saving && !deleteBusy && !relBusy}
+              ondragstart={() => startRowDrag(post.id)}
+              ondragend={endRowDrag}
+              title="Drag to reorder (sets menu order)">⠿</td>
           <td>{post.id}</td>
           <td>
             <input
@@ -586,7 +665,8 @@
           <td class="row-status">
             {#if rowErrors[post.id]}<span class="error">{rowErrors[post.id]}</span>{/if}
           </td>
-        </tr>
+          </tr>
+        {/if}
       {/each}
     </tbody>
   </table>
@@ -650,5 +730,20 @@
   }
   .child-count {
     cursor: help;
+  }
+  .drag-col {
+    width: 1.6rem;
+  }
+  .drag-handle {
+    cursor: grab;
+    text-align: center;
+    color: #999;
+    user-select: none;
+  }
+  .drag-handle:active {
+    cursor: grabbing;
+  }
+  tr.dragging {
+    opacity: 0.4;
   }
 </style>
