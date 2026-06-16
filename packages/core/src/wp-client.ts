@@ -380,7 +380,7 @@ export function normalizePostTypes(raw: unknown): WpPostType[] {
   return result;
 }
 
-function normalizePost(raw: WpPostResponse): WpPost {
+export function normalizePost(raw: WpPostResponse): WpPost {
   const post: WpPost = {
     id: raw.id,
     type: raw.type,
@@ -392,14 +392,21 @@ function normalizePost(raw: WpPostResponse): WpPost {
   if (raw.dbp_wp_meta !== undefined) {
     post.dbpWpMeta = raw.dbp_wp_meta;
   }
-  // Parent relation rides the standard `meta` field (registered by the connector). A
-  // missing/zero id or empty type reads as "no parent", so only a complete pair is set.
+  // Parent relation rides the standard `meta` field (registered by the connector). It needs
+  // both a positive id and a non-empty type; a half-written pair — e.g. from a raw REST
+  // write that set only one key, or a parent type sanitized to '' — reads as no relation.
+  // parent and parentType are therefore set together or not at all, so normalizePost,
+  // getRelation, and deriveChildren stay consistent on malformed data.
   const rawParent = raw.meta?.[PARENT_META_KEY];
-  if (typeof rawParent === 'number' && Number.isInteger(rawParent) && rawParent > 0) {
-    post.parent = rawParent;
-  }
   const rawParentType = raw.meta?.[PARENT_TYPE_META_KEY];
-  if (typeof rawParentType === 'string' && rawParentType !== '') {
+  if (
+    typeof rawParent === 'number' &&
+    Number.isInteger(rawParent) &&
+    rawParent > 0 &&
+    typeof rawParentType === 'string' &&
+    rawParentType !== ''
+  ) {
+    post.parent = rawParent;
     post.parentType = rawParentType;
   }
   return post;

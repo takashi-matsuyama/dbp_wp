@@ -5,10 +5,12 @@ import {
   buildPostBody,
   buildUpdateBody,
   hasConnectorNamespace,
+  normalizePost,
   normalizePostTypes,
   normalizeSiteUrl,
   sanitizeMetaKeys,
 } from './wp-client';
+import type { WpPostResponse } from './types';
 
 describe('buildAuthHeader', () => {
   it('builds an HTTP Basic header from Application Password credentials', () => {
@@ -162,5 +164,48 @@ describe('normalizePostTypes', () => {
   it('returns an empty list for a non-object', () => {
     expect(normalizePostTypes(null)).toEqual([]);
     expect(normalizePostTypes('x')).toEqual([]);
+  });
+});
+
+describe('normalizePost relation fields', () => {
+  function raw(meta: Record<string, unknown>): WpPostResponse {
+    return {
+      id: 5,
+      type: 'post',
+      status: 'publish',
+      title: { rendered: 'r', raw: 'Post 5' },
+      menu_order: 0,
+      meta,
+    };
+  }
+
+  it('sets parent and parentType together when both are valid', () => {
+    const post = normalizePost(raw({ _dbp_wp_parent: 7, _dbp_wp_parent_type: 'pages' }));
+    expect(post.parent).toBe(7);
+    expect(post.parentType).toBe('pages');
+  });
+
+  it('treats a half-written relation as no relation (id without a type)', () => {
+    const post = normalizePost(raw({ _dbp_wp_parent: 7 }));
+    expect(post.parent).toBeUndefined();
+    expect(post.parentType).toBeUndefined();
+  });
+
+  it('treats a half-written relation as no relation (type sanitized to empty)', () => {
+    const post = normalizePost(raw({ _dbp_wp_parent: 7, _dbp_wp_parent_type: '' }));
+    expect(post.parent).toBeUndefined();
+    expect(post.parentType).toBeUndefined();
+  });
+
+  it('ignores a non-positive parent id even with a type present', () => {
+    const post = normalizePost(raw({ _dbp_wp_parent: 0, _dbp_wp_parent_type: 'pages' }));
+    expect(post.parent).toBeUndefined();
+    expect(post.parentType).toBeUndefined();
+  });
+
+  it('leaves both unset when no relation meta is present', () => {
+    const post = normalizePost(raw({}));
+    expect(post.parent).toBeUndefined();
+    expect(post.parentType).toBeUndefined();
   });
 });
