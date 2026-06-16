@@ -31,6 +31,22 @@ describe('createPostsTable', () => {
     });
     expect(table.getSortedRowModel().rows.map((r) => r.original.id)).toEqual([3, 2, 1]);
   });
+
+  it('builds header groups and visible cells without throwing', () => {
+    // Regression: a partially-controlled state left columnPinning undefined, so
+    // getHeaderGroups() (which reads columnPinning.left) threw in the browser — the
+    // unit tests above never exercised it because they only read row models.
+    // getFlatHeaders() depends on getHeaderGroups(), so this drives the crashing path.
+    const table = createPostsTable({ data: posts, sorting: [], onSortingChange() {} });
+    expect(table.getFlatHeaders().map((h) => h.column.id)).toEqual([
+      'id',
+      'title',
+      'status',
+      'menuOrder',
+    ]);
+    const firstRow = table.getRowModel().rows[0];
+    expect(firstRow?.getVisibleCells()).toHaveLength(4);
+  });
 });
 
 describe('sortIndicator', () => {

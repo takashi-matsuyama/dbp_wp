@@ -29,16 +29,26 @@ export interface PostsTableArgs {
 
 /** Create a controlled posts table instance (sorting state is owned by the caller). */
 export function createPostsTable(args: PostsTableArgs): Table<WpPost> {
-  return createTable<WpPost>({
+  const table = createTable<WpPost>({
     data: args.data,
     columns: postColumns,
-    state: { sorting: args.sorting },
+    state: {},
     onSortingChange: args.onSortingChange,
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel(),
     onStateChange() {},
     renderFallbackValue: null,
   });
+  // table-core's getState() returns options.state verbatim — it does NOT merge in the
+  // default initialState. A partially-controlled state (just `sorting`) would therefore
+  // leave slices like `columnPinning` undefined, and getHeaderGroups() crashes reading
+  // `columnPinning.left`. Merge our controlled `sorting` over the full default state, the
+  // same way the framework adapters do, so every slice the table reads is present.
+  table.setOptions((prev) => ({
+    ...prev,
+    state: { ...table.initialState, sorting: args.sorting },
+  }));
+  return table;
 }
 
 /** Safe header text (our columns use string headers, never render functions). */
