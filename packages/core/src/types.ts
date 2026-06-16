@@ -25,6 +25,8 @@ export interface WpPostResponse {
   status: string;
   title: { rendered: string; raw?: string };
   menu_order: number;
+  /** Featured image (attachment) ID; `0` when the post has no featured image. */
+  featured_media?: number;
   meta: Record<string, unknown>;
   /**
    * Arbitrary post meta exposed by the companion plugin's `dbp_wp_meta` field.
@@ -76,6 +78,12 @@ export interface WpPost {
    * {@link WpPost.parent}; `undefined` when the post has no parent.
    */
   parentType?: string;
+  /**
+   * Featured image (attachment) ID from the core `featured_media` field. Present only when
+   * the post has a featured image (`featured_media > 0`); `undefined` otherwise. The image's
+   * URL is resolved separately ({@link WpMedia}) so the listing stays lean.
+   */
+  featuredMedia?: number;
 }
 
 /**
@@ -89,6 +97,11 @@ export interface UpdatePostFields {
   menuOrder?: number;
   /** Post status (e.g. `publish`, `draft`). */
   status?: string;
+  /**
+   * Featured image (attachment) ID (sent as `featured_media`). A core REST field — no
+   * companion plugin needed. Pass `0` to remove the post's featured image.
+   */
+  featuredMedia?: number;
 }
 
 /** A WordPress post type available for listing/editing over REST. */
@@ -107,6 +120,33 @@ export interface DeleteMetaResult {
   postId: number;
   /** Keys actually deleted (a key not present on the post is omitted). */
   deleted: string[];
+}
+
+/**
+ * A normalized WordPress media (attachment) item, as used by the media picker and the
+ * spreadsheet's featured-image column. Built from a raw `/wp/v2/media` response.
+ */
+export interface WpMedia {
+  /** Attachment ID. */
+  id: number;
+  /** Full-size source URL of the media file (`''` when unavailable). */
+  sourceUrl: string;
+  /** Thumbnail-size URL when WordPress generated one; falls back to {@link WpMedia.sourceUrl}. */
+  thumbnailUrl: string;
+  /** Media title (rendered), or `''` when absent. */
+  title: string;
+  /** MIME type (e.g. `image/png`), or `''` when unknown. */
+  mimeType: string;
+}
+
+/** Parameters for listing media (image attachments). */
+export interface ListMediaParams {
+  /** 1-based page number. Defaults to 1. */
+  page?: number;
+  /** Page size (WordPress caps this at 100). Defaults to 30. */
+  perPage?: number;
+  /** Free-text search across media (title/filename). */
+  search?: string;
 }
 
 /** Parameters for listing posts. */

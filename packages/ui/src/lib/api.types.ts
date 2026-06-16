@@ -1,4 +1,4 @@
-import type { PrintRecord, WpPost, WpPostType } from '@dbp-wp/core';
+import type { PrintRecord, WpMedia, WpPost, WpPostType } from '@dbp-wp/core';
 
 // Shared data types and the data-layer interface. Two implementations satisfy `ApiImpl`:
 // `api.cli.ts` (the real CLI-backed `/api` client) and `api.local.ts` (the browser demo's
@@ -39,6 +39,8 @@ export interface PostUpdate {
   title?: string;
   menuOrder?: number;
   status?: string;
+  /** Featured image (attachment) id; `0` removes it. A core REST field (no connector). */
+  featuredMedia?: number;
   /** Arbitrary meta to write via the companion plugin (full mode only). */
   meta?: Record<string, unknown>;
 }
@@ -72,6 +74,12 @@ export interface MetaDeletion {
   keys: string[];
 }
 
+/** A page of media-library results, with the total page count for the picker's pager. */
+export interface MediaListResult {
+  items: WpMedia[];
+  totalPages: number;
+}
+
 /**
  * The data layer the UI depends on. Both the CLI client and the local demo store implement
  * this exact surface so the views are identical in either build.
@@ -95,4 +103,10 @@ export interface ApiImpl {
   ): Promise<WpPost>;
   /** Clear a child post's parent (companion plugin required). Returns the updated post. */
   clearRelation(childId: number, childType: string): Promise<WpPost>;
+  /** Upload an image to the media library and return the created item (core REST, no connector). */
+  uploadMedia(file: File): Promise<WpMedia>;
+  /** List image attachments for the media picker, paginated/searchable (core REST). */
+  listMedia(query?: { page?: number; search?: string }): Promise<MediaListResult>;
+  /** Resolve specific media ids to their URLs (to fill featured-image thumbnails). */
+  resolveMedia(ids: number[]): Promise<WpMedia[]>;
 }

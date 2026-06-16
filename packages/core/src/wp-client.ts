@@ -8,9 +8,11 @@ import {
 } from './relation';
 import type {
   DeleteMetaResult,
+  ListMediaParams,
   ListPostsParams,
   UpdatePostFields,
   WpCredentials,
+  WpMedia,
   WpPost,
   WpPostResponse,
   WpPostType,
@@ -96,7 +98,13 @@ export class WpClient {
     this.restBase = normalizeSiteUrl(credentials.siteUrl);
   }
 
-  private async request<T>(path: string, init: RequestInit = {}): Promise<T> {
+  /**
+   * Send an authenticated request and return the raw {@link Response} (throwing on non-2xx),
+   * so callers that need response headers — e.g. media pagination via `X-WP-TotalPages` —
+   * can read them. A JSON `Content-Type` is declared only when a body is sent; a caller may
+   * override it via `init.headers` (the media upload sends the file's own type).
+   */
+  private async send(path: string, init: RequestInit = {}): Promise<Response> {
     const response = await fetch(`${this.restBase}/wp-json${path}`, {
       ...init,
       headers: {
@@ -115,7 +123,11 @@ export class WpClient {
       );
     }
 
-    return (await response.json()) as T;
+    return response;
+  }
+
+  private async request<T>(path: string, init: RequestInit = {}): Promise<T> {
+    return (await this.send(path, init)).json() as Promise<T>;
   }
 
   /**
@@ -279,6 +291,68 @@ export class WpClient {
     const index = await this.request<{ namespaces?: unknown }>('/');
     return hasConnectorNamespace(index.namespaces);
   }
+
+  /**
+   * Upload an image to the media library via core REST (`POST /wp/v2/media`), the same
+   * contract WordPress uses: raw bytes with a `Content-Disposition` filename and the file's
+   * MIME type (octet-stream when unknown). No companion plugin needed; the authenticated
+   * user must have `upload_files`. Returns the normalized media item.
+   */
+  async uploadMedia(bytes: Uint8Array, filename: string, mimeType?: string): Promise<WpMedia> {
+    const name = sanitizeFilename(filename);
+    const response = await this.send('/wp/v2/media', {
+      method: 'POST',
+      body: bytes,
+      headers: {
+        'Content-Type': mimeType && mimeType.length > 0 ? mimeType : 'application/octet-stream',
+        'Content-Disposition': `attachment; filename="${name}"`,
+      },
+    });
+    return normalizeMedia(await response.json());
+  }
+
+  /**
+   * List image attachments (`GET /wp/v2/media?media_type=image`), paginated. Reads the
+   * `X-WP-TotalPages` response header so the picker can page through the library. A core
+   * REST call — no companion plugin needed.
+   */
+  async listMedia(params: ListMediaParams = {}): Promise<{ items: WpMedia[]; totalPages: number }> {
+    const perPage = clampInt(params.perPage ?? 30, 1, 100);
+    const page = clampInt(params.page ?? 1, 1, Number.MAX_SAFE_INTEGER);
+    const query = new URLSearchParams({
+      media_type: 'image',
+      per_page: String(perPage),
+      page: String(page),
+    });
+    const search = params.search?.trim();
+    if (search) {
+      query.set('search', search);
+    }
+    const response = await this.send(`/wp/v2/media?${query.toString()}`);
+    const raw = (await response.json()) as unknown;
+    return {
+      items: Array.isArray(raw) ? raw.map(normalizeMedia) : [],
+      totalPages: parseTotalPages(response.headers.get('X-WP-TotalPages')),
+    };
+  }
+
+  /**
+   * Resolve specific media ids to their URLs in one request (`?include=`), used to fill in
+   * the featured-image thumbnails for the posts currently shown — without embedding media
+   * into the lean post listing. A core REST call — no companion plugin needed.
+   */
+  async resolveMedia(ids: number[]): Promise<WpMedia[]> {
+    const clean = [...new Set(ids.filter((id) => Number.isSafeInteger(id) && id > 0))];
+    if (clean.length === 0) {
+      return [];
+    }
+    const query = new URLSearchParams({
+      include: clean.join(','),
+      per_page: String(clampInt(clean.length, 1, 100)),
+    });
+    const raw = await this.request<unknown>(`/wp/v2/media?${query.toString()}`);
+    return Array.isArray(raw) ? raw.map(normalizeMedia) : [];
+  }
 }
 
 /** Map editable fields to the WordPress REST request body (camelCase → snake_case). */
@@ -292,6 +366,10 @@ export function buildUpdateBody(fields: UpdatePostFields): Record<string, unknow
   }
   if (fields.status !== undefined) {
     body.status = fields.status;
+  }
+  if (fields.featuredMedia !== undefined) {
+    // `0` is meaningful here (removes the featured image), so check for undefined, not falsy.
+    body.featured_media = fields.featuredMedia;
   }
   return body;
 }
@@ -353,6 +431,71 @@ export function hasConnectorNamespace(namespaces: unknown): boolean {
   return Array.isArray(namespaces) && namespaces.includes(CONNECTOR_NAMESPACE);
 }
 
+/** Reduce a filename to its basename and strip characters that could break a header. */
+function sanitizeFilename(name: string): string {
+  const base = name.split(/[/\\]/).pop() ?? name;
+  // Drop quotes and CR/LF so the value cannot break out of the Content-Disposition header.
+  const clean = base.replace(/["\r\n]/g, '').trim();
+  return clean.length > 0 ? clean : 'upload';
+}
+
+/** Parse the `X-WP-TotalPages` header into a positive page count, defaulting to 1. */
+function parseTotalPages(header: string | null): number {
+  if (header === null) {
+    return 1;
+  }
+  const n = Number.parseInt(header, 10);
+  return Number.isFinite(n) && n > 0 ? n : 1;
+}
+
+/** Read `<obj>.rendered` as a string, or `''` when absent/malformed. */
+function extractRendered(value: unknown): string {
+  if (value !== null && typeof value === 'object') {
+    const rendered = (value as Record<string, unknown>).rendered;
+    if (typeof rendered === 'string') {
+      return rendered;
+    }
+  }
+  return '';
+}
+
+/** Prefer a thumbnail-sized URL from `media_details.sizes`, else a medium one, else `''`. */
+function extractThumbnailUrl(mediaDetails: unknown): string {
+  if (mediaDetails === null || typeof mediaDetails !== 'object') {
+    return '';
+  }
+  const sizes = (mediaDetails as Record<string, unknown>).sizes;
+  if (sizes === null || typeof sizes !== 'object') {
+    return '';
+  }
+  for (const sizeName of ['thumbnail', 'medium']) {
+    const size = (sizes as Record<string, unknown>)[sizeName];
+    if (size !== null && typeof size === 'object') {
+      const url = (size as Record<string, unknown>).source_url;
+      if (typeof url === 'string') {
+        return url;
+      }
+    }
+  }
+  return '';
+}
+
+/**
+ * Normalize a raw `/wp/v2/media` item into {@link WpMedia}. Accepts `unknown` and guards each
+ * field, so a malformed entry degrades to empty strings rather than throwing.
+ */
+export function normalizeMedia(raw: unknown): WpMedia {
+  const obj = (typeof raw === 'object' && raw !== null ? raw : {}) as Record<string, unknown>;
+  const sourceUrl = typeof obj.source_url === 'string' ? obj.source_url : '';
+  return {
+    id: typeof obj.id === 'number' ? obj.id : 0,
+    sourceUrl,
+    thumbnailUrl: extractThumbnailUrl(obj.media_details) || sourceUrl,
+    title: extractRendered(obj.title),
+    mimeType: typeof obj.mime_type === 'string' ? obj.mime_type : '',
+  };
+}
+
 /**
  * Normalize the `/wp/v2/types` response (an object keyed by type name) into a list.
  * Skips entries without a string `rest_base` (not addressable over REST).
@@ -391,6 +534,10 @@ export function normalizePost(raw: WpPostResponse): WpPost {
   };
   if (raw.dbp_wp_meta !== undefined) {
     post.dbpWpMeta = raw.dbp_wp_meta;
+  }
+  // featured_media is always present on a core post; 0 means "no featured image".
+  if (typeof raw.featured_media === 'number' && raw.featured_media > 0) {
+    post.featuredMedia = raw.featured_media;
   }
   // Parent relation rides the standard `meta` field (registered by the connector). It needs
   // both a positive id and a non-empty type; a half-written pair — e.g. from a raw REST

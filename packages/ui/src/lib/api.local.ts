@@ -1,8 +1,9 @@
-import type { PrintRecord, WpPost, WpPostType } from '@dbp-wp/core';
+import type { PrintRecord, WpMedia, WpPost, WpPostType } from '@dbp-wp/core';
 import type {
   ConnectionStatus,
   ImportCreateInput,
   ImportResult,
+  MediaListResult,
   MetaDeletion,
   PostUpdate,
   PostsResponse,
@@ -35,11 +36,25 @@ interface DemoRecord {
   content: string;
   excerpt: string;
   featuredImageUrl: string;
+  /** Featured media id (into the demo media store), mirroring `featured_media` in full mode. */
+  featuredMedia?: number;
   meta: Record<string, string>;
   tax: Record<string, string[]>;
   parent?: number;
   parentType?: string;
 }
+
+/** An in-memory demo media item (shape-compatible with {@link WpMedia}). */
+interface DemoMedia {
+  id: number;
+  sourceUrl: string;
+  thumbnailUrl: string;
+  title: string;
+  mimeType: string;
+}
+
+/** Media ids live in their own range so they never collide with demo post ids. */
+const MEDIA_ID_BASE = 10001;
 
 // A tiny inline placeholder so a region (no flag) never makes a network request.
 const PLACEHOLDER_IMAGE =
@@ -64,7 +79,7 @@ function seed(): DemoRecord[] {
     tax: { region: [r.name] },
   }));
 
-  const countries: DemoRecord[] = DEMO_COUNTRIES.map((c) => ({
+  const countries: DemoRecord[] = DEMO_COUNTRIES.map((c, i) => ({
     id: c.id,
     type: COUNTRY_TYPE,
     title: c.name,
@@ -73,6 +88,8 @@ function seed(): DemoRecord[] {
     content: `<p>${c.name} — capital ${c.capital || 'n/a'}, ${c.region}.</p>`,
     excerpt: `<p>${c.name}</p>`,
     featuredImageUrl: c.flag,
+    // The flag rides as the featured image; its media id matches seedMedia()'s id scheme.
+    featuredMedia: MEDIA_ID_BASE + i,
     meta: {
       iso2: c.iso2,
       capital: c.capital,
@@ -92,8 +109,21 @@ function seed(): DemoRecord[] {
   return [...countries, ...regions];
 }
 
+/** Seed the media library from the country flags, with ids matching seed()'s scheme. */
+function seedMedia(): DemoMedia[] {
+  return DEMO_COUNTRIES.map((c, i) => ({
+    id: MEDIA_ID_BASE + i,
+    sourceUrl: c.flag,
+    thumbnailUrl: c.flag,
+    title: `${c.name} flag`,
+    mimeType: 'image/png',
+  }));
+}
+
 const store: DemoRecord[] = seed();
+const mediaStore: DemoMedia[] = seedMedia();
 let nextId = Math.max(...store.map((r) => r.id)) + 1;
+let nextMediaId = Math.max(MEDIA_ID_BASE - 1, ...mediaStore.map((m) => m.id)) + 1;
 
 function toWpPost(d: DemoRecord): WpPost {
   // The demo presents as a connector-active site, so meta lives under dbpWpMeta (the
@@ -113,7 +143,14 @@ function toWpPost(d: DemoRecord): WpPost {
   if (d.parentType !== undefined) {
     post.parentType = d.parentType;
   }
+  if (d.featuredMedia !== undefined) {
+    post.featuredMedia = d.featuredMedia;
+  }
   return post;
+}
+
+function toWpMedia(m: DemoMedia): WpMedia {
+  return { ...m };
 }
 
 function toPrintRecord(d: DemoRecord): PrintRecord {
@@ -185,6 +222,17 @@ export function savePosts(updates: PostUpdate[]): Promise<UpdateResult[]> {
     if (update.title !== undefined) post.title = update.title;
     if (update.menuOrder !== undefined) post.menuOrder = update.menuOrder;
     if (update.status !== undefined) post.status = update.status;
+    if (update.featuredMedia !== undefined) {
+      if (update.featuredMedia === 0) {
+        delete post.featuredMedia;
+        post.featuredImageUrl = PLACEHOLDER_IMAGE;
+      } else {
+        post.featuredMedia = update.featuredMedia;
+        // Mirror the URL onto the record so the Print view reflects the new featured image.
+        const m = mediaStore.find((x) => x.id === update.featuredMedia);
+        if (m) post.featuredImageUrl = m.sourceUrl;
+      }
+    }
     if (update.meta) {
       for (const [key, value] of Object.entries(update.meta)) {
         post.meta[key] = value == null ? '' : String(value);
@@ -264,4 +312,51 @@ export function clearRelation(childId: number, _childType: string): Promise<WpPo
   delete post.parent;
   delete post.parentType;
   return Promise.resolve(toWpPost(post));
+}
+
+/** How many media items the demo picker shows per page. */
+const MEDIA_PER_PAGE = 12;
+
+/**
+ * Upload a local file into the demo media store. Network-free: the file is read into a
+ * data URL with FileReader and kept in memory only (nothing is sent anywhere), matching the
+ * demo's "data stays in your browser" guarantee.
+ */
+export function uploadMedia(file: File): Promise<WpMedia> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const url = typeof reader.result === 'string' ? reader.result : '';
+      const media: DemoMedia = {
+        id: nextMediaId++,
+        sourceUrl: url,
+        thumbnailUrl: url,
+        title: file.name,
+        mimeType: file.type || 'application/octet-stream',
+      };
+      mediaStore.push(media);
+      resolve(toWpMedia(media));
+    };
+    reader.onerror = () => reject(new Error('Could not read the file.'));
+    reader.readAsDataURL(file);
+  });
+}
+
+export function listMedia(query?: { page?: number; search?: string }): Promise<MediaListResult> {
+  const search = query?.search?.trim().toLowerCase();
+  // Newest first (uploads appear at the top), then optional title filter.
+  const ordered = mediaStore.slice().reverse();
+  const filtered = search ? ordered.filter((m) => m.title.toLowerCase().includes(search)) : ordered;
+  const totalPages = Math.max(1, Math.ceil(filtered.length / MEDIA_PER_PAGE));
+  const page = Math.min(Math.max(1, query?.page ?? 1), totalPages);
+  const start = (page - 1) * MEDIA_PER_PAGE;
+  return Promise.resolve({
+    items: filtered.slice(start, start + MEDIA_PER_PAGE).map(toWpMedia),
+    totalPages,
+  });
+}
+
+export function resolveMedia(ids: number[]): Promise<WpMedia[]> {
+  const wanted = new Set(ids);
+  return Promise.resolve(mediaStore.filter((m) => wanted.has(m.id)).map(toWpMedia));
 }

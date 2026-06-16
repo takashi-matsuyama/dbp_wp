@@ -22,3 +22,6 @@ export const bulkDeleteMeta = impl.bulkDeleteMeta;
 export const fetchPrintRecords = impl.fetchPrintRecords;
 export const setRelation = impl.setRelation;
 export const clearRelation = impl.clearRelation;
+export const uploadMedia = impl.uploadMedia;
+export const listMedia = impl.listMedia;
+export const resolveMedia = impl.resolveMedia;

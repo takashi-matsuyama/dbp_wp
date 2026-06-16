@@ -1,12 +1,15 @@
 <script lang="ts">
-  import type { WpPost, WpPostType } from '@dbp-wp/core';
+  import type { WpMedia, WpPost, WpPostType } from '@dbp-wp/core';
   import { deriveChildren, getRelation } from '@dbp-wp/core';
   import {
     bulkDeleteMeta,
     clearRelation,
     fetchPosts,
+    listMedia,
+    resolveMedia,
     savePosts,
     setRelation,
+    uploadMedia,
     type PostUpdate,
   } from '../api';
   import { computeMenuOrders } from '../formula';
@@ -306,6 +309,143 @@
     }
   });
 
+  // --- Featured image (core REST `featured_media`; no connector needed) ---
+  // Assignment is a draft (the post id → new featured media id; 0 = remove) that rides the
+  // existing batch Save, just like title/menu_order. Uploading an image is immediate (it
+  // creates a media item), but assigning it to the post waits for Save.
+
+  let featuredDrafts = $state<Record<number, number>>({});
+  // Cache of media id → preview URL, filled lazily so the lean post listing stays embed-free.
+  let mediaUrls = $state<Record<number, string>>({});
+  // Non-reactive guard so each featured id is only resolved once (avoids an effect loop).
+  const requestedMediaIds = new Set<number>();
+
+  // The media id currently shown for a post: a draft wins (0 means "no image"), else the
+  // post's saved featured_media.
+  function effectiveFeatured(post: WpPost): number | undefined {
+    const draft = featuredDrafts[post.id];
+    if (draft !== undefined) {
+      return draft === 0 ? undefined : draft;
+    }
+    return post.featuredMedia;
+  }
+
+  function isFeaturedChanged(post: WpPost): boolean {
+    const draft = featuredDrafts[post.id];
+    return draft !== undefined && draft !== (post.featuredMedia ?? 0);
+  }
+
+  function removeFeatured(post: WpPost): void {
+    featuredDrafts[post.id] = 0;
+  }
+
+  async function resolveFeaturedUrls(ids: number[]): Promise<void> {
+    try {
+      const media = await resolveMedia(ids);
+      const next = { ...mediaUrls };
+      for (const m of media) {
+        next[m.id] = m.thumbnailUrl || m.sourceUrl;
+      }
+      mediaUrls = next;
+    } catch {
+      // Thumbnails are best-effort; leave unresolved ids without a preview.
+    }
+  }
+
+  // Resolve preview URLs for the featured images on the loaded posts (once per id).
+  $effect(() => {
+    const ids: number[] = [];
+    for (const post of posts) {
+      const id = post.featuredMedia;
+      if (id !== undefined && !requestedMediaIds.has(id)) {
+        requestedMediaIds.add(id);
+        ids.push(id);
+      }
+    }
+    if (ids.length > 0) {
+      void resolveFeaturedUrls(ids);
+    }
+  });
+
+  // --- Media picker (modal) ---
+  let pickerForPost = $state<number | null>(null);
+  let mediaItems = $state<WpMedia[]>([]);
+  let mediaPage = $state(1);
+  let mediaTotalPages = $state(1);
+  let mediaSearch = $state('');
+  let mediaLoading = $state(false);
+  let mediaError = $state<string | null>(null);
+  let uploading = $state(false);
+
+  async function loadMedia(): Promise<void> {
+    mediaLoading = true;
+    mediaError = null;
+    try {
+      const search = mediaSearch.trim();
+      const res = await listMedia(search ? { page: mediaPage, search } : { page: mediaPage });
+      mediaItems = res.items;
+      mediaTotalPages = res.totalPages;
+    } catch (e) {
+      mediaError = e instanceof Error ? e.message : String(e);
+    } finally {
+      mediaLoading = false;
+    }
+  }
+
+  function openPicker(post: WpPost): void {
+    pickerForPost = post.id;
+    mediaSearch = '';
+    mediaPage = 1;
+    mediaError = null;
+    void loadMedia();
+  }
+
+  function closePicker(): void {
+    pickerForPost = null;
+  }
+
+  function searchMedia(): void {
+    mediaPage = 1;
+    void loadMedia();
+  }
+
+  function gotoMediaPage(page: number): void {
+    const next = Math.min(Math.max(1, page), mediaTotalPages);
+    if (next !== mediaPage) {
+      mediaPage = next;
+      void loadMedia();
+    }
+  }
+
+  // Assign a media item as the target post's featured image (draft) and close the picker.
+  function selectMedia(media: WpMedia): void {
+    if (pickerForPost !== null) {
+      featuredDrafts[pickerForPost] = media.id;
+      mediaUrls = { ...mediaUrls, [media.id]: media.thumbnailUrl || media.sourceUrl };
+      requestedMediaIds.add(media.id);
+    }
+    closePicker();
+  }
+
+  async function handleUpload(event: Event): Promise<void> {
+    const input = event.currentTarget as HTMLInputElement;
+    const file = input.files?.[0];
+    if (!file) {
+      return;
+    }
+    uploading = true;
+    mediaError = null;
+    try {
+      const media = await uploadMedia(file);
+      selectMedia(media); // upload immediately assigns it (draft) and closes the picker
+    } catch (e) {
+      mediaError = e instanceof Error ? e.message : String(e);
+    } finally {
+      uploading = false;
+      input.value = ''; // allow re-selecting the same file
+    }
+  }
+
   // --- Drag-and-drop reorder (→ menu_order) ---
   // `rowOrder` is the dragged display order (post ids); it is used only while it is a valid
   // permutation of the loaded posts, otherwise the grid falls back to the posts' own order
@@ -375,7 +515,11 @@
     const draft = drafts[post.id];
     const fieldChanged =
       draft !== undefined && (draft.title !== post.title || draft.menuOrder !== post.menuOrder);
-    return fieldChanged || metaColumns.some((key) => isMetaChanged(post, key));
+    return (
+      fieldChanged ||
+      isFeaturedChanged(post) ||
+      metaColumns.some((key) => isMetaChanged(post, key))
+    );
   }
 
   const changed = $derived(posts.filter(isChanged));
@@ -411,6 +555,11 @@
       if (draft.menuOrder !== post.menuOrder) {
         update.menuOrder = draft.menuOrder;
       }
+      const featured = featuredDrafts[post.id];
+      if (featured !== undefined && featured !== (post.featuredMedia ?? 0)) {
+        // The draft is the new featured_media id (0 removes it).
+        update.featuredMedia = featured;
+      }
       const meta: Record<string, string> = {};
       for (const key of metaColumns) {
         if (isMetaChanged(post, key)) {
@@ -444,12 +593,15 @@
         // Drop saved rows' drafts; keep failed rows editable so a retry only resends them.
         const remaining = { ...drafts };
         const remainingMeta = { ...metaDrafts };
+        const remainingFeatured = { ...featuredDrafts };
         for (const id of succeeded) {
           delete remaining[id];
           delete remainingMeta[id];
+          delete remainingFeatured[id];
         }
         drafts = remaining;
         metaDrafts = remainingMeta;
+        featuredDrafts = remainingFeatured;
         await onsaved();
       }
     } catch (e) {
@@ -519,6 +671,7 @@
         <th>ID</th>
         <th>Title</th>
         <th>Menu order</th>
+        <th>Featured</th>
         {#if connectorAvailable}
           <th>Parent</th>
           <th>Children</th>
@@ -557,6 +710,7 @@
       {#each displayOrder as id (id)}
         {@const post = postById.get(id)}
         {#if post}
+          {@const fid = effectiveFeatured(post)}
           <tr
             class:changed={isChanged(post)}
             class:dragging={dragId === post.id}
@@ -584,6 +738,31 @@
               disabled={saving}
               oninput={(e) => setMenuOrder(post, (e.currentTarget as HTMLInputElement).value)}
             />
+          </td>
+          <td class="featured-cell" class:changed-cell={isFeaturedChanged(post)}>
+            {#if fid !== undefined}
+              {#if mediaUrls[fid]}
+                <img class="featured-thumb" src={mediaUrls[fid]} alt="" />
+              {/if}
+              <span class="featured-id">#{fid}</span>
+              <button
+                class="rel-edit"
+                onclick={() => openPicker(post)}
+                disabled={saving || deleteBusy || relBusy}>Change</button
+              >
+              <button
+                class="rel-edit"
+                onclick={() => removeFeatured(post)}
+                disabled={saving || deleteBusy || relBusy}>Remove</button
+              >
+            {:else}
+              <span class="parent-none">—</span>
+              <button
+                class="rel-edit"
+                onclick={() => openPicker(post)}
+                disabled={saving || deleteBusy || relBusy}>Set image</button
+              >
+            {/if}
           </td>
           {#if connectorAvailable}
             <td class="relation-cell">
@@ -672,6 +851,59 @@
   </table>
 {/if}
 
+{#if pickerForPost !== null}
+  <div
+    class="picker-overlay"
+    role="presentation"
+    onclick={(e) => {
+      if (e.target === e.currentTarget) closePicker();
+    }}
+  >
+    <div class="picker" role="dialog" aria-modal="true" aria-label="Media library">
+      <div class="picker-head">
+        <strong>Media library</strong>
+        <input
+          class="picker-search"
+          bind:value={mediaSearch}
+          placeholder="Search media…"
+          onkeydown={(e) => e.key === 'Enter' && searchMedia()}
+        />
+        <button onclick={searchMedia} disabled={mediaLoading}>Search</button>
+        <label class="picker-upload">
+          {uploading ? 'Uploading…' : 'Upload'}
+          <input type="file" accept="image/*" onchange={handleUpload} disabled={uploading} />
+        </label>
+        <button class="picker-close" onclick={closePicker} aria-label="Close">×</button>
+      </div>
+      {#if mediaError}<p class="error">{mediaError}</p>{/if}
+      {#if mediaLoading}
+        <p class="picker-status">Loading…</p>
+      {:else if mediaItems.length === 0}
+        <p class="picker-status">No media found.</p>
+      {:else}
+        <div class="picker-grid">
+          {#each mediaItems as media (media.id)}
+            <button class="picker-item" onclick={() => selectMedia(media)} title={media.title}>
+              <img src={media.thumbnailUrl || media.sourceUrl} alt={media.title} />
+              <span class="picker-item-label">#{media.id} {media.title}</span>
+            </button>
+          {/each}
+        </div>
+      {/if}
+      <div class="picker-pager">
+        <button onclick={() => gotoMediaPage(mediaPage - 1)} disabled={mediaLoading || mediaPage <= 1}
+          >‹ Prev</button
+        >
+        <span>Page {mediaPage} / {mediaTotalPages}</span>
+        <button
+          onclick={() => gotoMediaPage(mediaPage + 1)}
+          disabled={mediaLoading || mediaPage >= mediaTotalPages}>Next ›</button
+        >
+      </div>
+    </div>
+  </div>
+{/if}
+
 <style>
   .meta-bar {
     display: flex;
@@ -745,5 +977,116 @@
   }
   tr.dragging {
     opacity: 0.4;
+  }
+  .featured-cell {
+    white-space: nowrap;
+  }
+  .featured-cell.changed-cell {
+    background: rgba(255, 215, 0, 0.18);
+  }
+  .featured-thumb {
+    width: 2rem;
+    height: 2rem;
+    object-fit: cover;
+    vertical-align: middle;
+    border: 1px solid rgba(0, 0, 0, 0.15);
+    border-radius: 3px;
+  }
+  .featured-id {
+    margin: 0 0.25rem;
+    font-size: 0.8rem;
+    opacity: 0.7;
+  }
+  .picker-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.45);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 100;
+    padding: 1rem;
+  }
+  .picker {
+    background: Canvas;
+    color: CanvasText;
+    border-radius: 6px;
+    box-shadow: 0 8px 30px rgba(0, 0, 0, 0.3);
+    width: min(720px, 100%);
+    max-height: 85vh;
+    display: flex;
+    flex-direction: column;
+    padding: 1rem;
+  }
+  .picker-head {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+  }
+  .picker-search {
+    flex: 1 1 12rem;
+  }
+  .picker-upload {
+    cursor: pointer;
+    border: 1px solid currentColor;
+    border-radius: 4px;
+    padding: 0.2rem 0.5rem;
+    font-size: 0.85rem;
+  }
+  .picker-upload input[type='file'] {
+    display: none;
+  }
+  .picker-close {
+    margin-left: auto;
+    line-height: 1;
+    padding: 0 0.4rem;
+    cursor: pointer;
+  }
+  .picker-status {
+    padding: 1rem;
+    opacity: 0.7;
+  }
+  .picker-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+    gap: 0.5rem;
+    overflow-y: auto;
+    margin: 0.5rem 0;
+    padding: 0.25rem;
+  }
+  .picker-item {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.25rem;
+    border: 1px solid rgba(0, 0, 0, 0.15);
+    border-radius: 4px;
+    padding: 0.25rem;
+    cursor: pointer;
+    background: none;
+    color: inherit;
+  }
+  .picker-item:hover {
+    border-color: #2563eb;
+  }
+  .picker-item img {
+    width: 100%;
+    height: 80px;
+    object-fit: cover;
+    border-radius: 3px;
+  }
+  .picker-item-label {
+    font-size: 0.7rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .picker-pager {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.75rem;
+    font-size: 0.85rem;
   }
 </style>

@@ -4,13 +4,14 @@ import type {
   ImportCreateInput,
   ImportResult,
   ListPostsQuery,
+  MediaListResult,
   MetaDeletion,
   PostUpdate,
   PostsResponse,
   PrintRecordsResponse,
   UpdateResult,
 } from './api.types';
-import type { WpPost, WpPostType } from '@dbp-wp/core';
+import type { WpMedia, WpPost, WpPostType } from '@dbp-wp/core';
 
 // The CLI-backed data layer. The UI talks only to the local CLI server (`/api/...`), never
 // to WordPress directly, so the browser never holds credentials and is not subject to
@@ -189,6 +190,68 @@ async function relationRequest(body: Record<string, unknown>, label: string): Pr
     throw new Error(data.error ?? `${label} failed: ${res.status}`);
   }
   return data.post as WpPost;
+}
+
+/** Build the local API path for listing/searching media. Exported for unit testing. */
+export function mediaListPath(query: { page?: number; search?: string } = {}): string {
+  const params = new URLSearchParams();
+  if (query.page && query.page > 1) {
+    params.set('page', String(query.page));
+  }
+  if (query.search && query.search.trim() !== '') {
+    params.set('search', query.search.trim());
+  }
+  const qs = params.toString();
+  return qs ? `/api/media?${qs}` : '/api/media';
+}
+
+/**
+ * Upload an image to the media library. The browser sends the raw file bytes (not JSON);
+ * the filename rides the required `X-DBP-Filename` header (percent-encoded so non-ASCII
+ * names survive), which the CLI also uses as a CSRF preflight guard for this binary route.
+ */
+export async function uploadMedia(file: File): Promise<WpMedia> {
+  const res = await fetch('/api/media', {
+    method: 'POST',
+    headers: {
+      'Content-Type': file.type || 'application/octet-stream',
+      'X-DBP-Filename': encodeURIComponent(file.name),
+    },
+    body: file,
+  });
+  const data = (await res.json().catch(() => ({}))) as { media?: WpMedia; error?: string };
+  if (!res.ok) {
+    throw new Error(data.error ?? `Upload failed: ${res.status}`);
+  }
+  return data.media as WpMedia;
+}
+
+/** List image attachments for the media picker (paginated, optionally searched). */
+export async function listMedia(
+  query: { page?: number; search?: string } = {},
+): Promise<MediaListResult> {
+  const res = await fetch(mediaListPath(query));
+  if (!res.ok) {
+    throw new Error(`Failed to load media: ${res.status}`);
+  }
+  const data = (await res.json()) as Partial<MediaListResult>;
+  return {
+    items: Array.isArray(data.items) ? data.items : [],
+    totalPages: typeof data.totalPages === 'number' && data.totalPages > 0 ? data.totalPages : 1,
+  };
+}
+
+/** Resolve specific media ids to their URLs (for featured-image thumbnails in the grid). */
+export async function resolveMedia(ids: number[]): Promise<WpMedia[]> {
+  if (ids.length === 0) {
+    return [];
+  }
+  const res = await fetch(`/api/media?include=${ids.join(',')}`);
+  if (!res.ok) {
+    throw new Error(`Failed to resolve media: ${res.status}`);
+  }
+  const data = (await res.json()) as { items?: WpMedia[] };
+  return Array.isArray(data.items) ? data.items : [];
 }
 
 /** Delete meta keys from many posts in one request (companion plugin required). */

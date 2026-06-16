@@ -64,6 +64,17 @@ function parseEditableFields(record: Record<string, unknown>): UpdatePostFields 
     }
     fields.status = record.status;
   }
+  if (record.featuredMedia !== undefined) {
+    // A core REST field (no connector). Non-negative integer; 0 removes the featured image.
+    if (
+      typeof record.featuredMedia !== 'number' ||
+      !Number.isSafeInteger(record.featuredMedia) ||
+      record.featuredMedia < 0
+    ) {
+      return null;
+    }
+    fields.featuredMedia = record.featuredMedia;
+  }
   return fields;
 }
 

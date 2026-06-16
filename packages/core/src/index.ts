@@ -3,11 +3,19 @@ export type {
   WpPost,
   WpPostResponse,
   WpPostType,
+  WpMedia,
   ListPostsParams,
+  ListMediaParams,
   UpdatePostFields,
   DeleteMetaResult,
 } from './types';
-export { WpClient, WpRequestError, buildAuthHeader, normalizeSiteUrl } from './wp-client';
+export {
+  WpClient,
+  WpRequestError,
+  buildAuthHeader,
+  normalizeSiteUrl,
+  normalizeMedia,
+} from './wp-client';
 export { type FormulaEngine, SafeFormulaEngine } from './calc/index';
 export {
   type ParsedTable,

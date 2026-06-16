@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { listPostsPath, printPostsPath } from './api.cli';
+import { listPostsPath, mediaListPath, printPostsPath } from './api.cli';
 
 describe('listPostsPath', () => {
   it('returns the base path with no query', () => {
@@ -25,5 +25,22 @@ describe('printPostsPath', () => {
     expect(printPostsPath({ type: 'pages' })).toBe('/api/print/posts?type=pages');
     expect(printPostsPath({ page: 1 })).toBe('/api/print/posts');
     expect(printPostsPath({ type: 'posts', page: 2 })).toBe('/api/print/posts?type=posts&page=2');
+  });
+});
+
+describe('mediaListPath', () => {
+  it('returns the base media path with no query', () => {
+    expect(mediaListPath()).toBe('/api/media');
+  });
+
+  it('omits page 1 and includes higher page numbers', () => {
+    expect(mediaListPath({ page: 1 })).toBe('/api/media');
+    expect(mediaListPath({ page: 2 })).toBe('/api/media?page=2');
+  });
+
+  it('includes a trimmed search term', () => {
+    expect(mediaListPath({ search: '  flag ' })).toBe('/api/media?search=flag');
+    expect(mediaListPath({ search: '   ' })).toBe('/api/media');
+    expect(mediaListPath({ page: 3, search: 'sun' })).toBe('/api/media?page=3&search=sun');
   });
 });

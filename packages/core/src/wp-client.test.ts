@@ -5,6 +5,7 @@ import {
   buildPostBody,
   buildUpdateBody,
   hasConnectorNamespace,
+  normalizeMedia,
   normalizePost,
   normalizePostTypes,
   normalizeSiteUrl,
@@ -75,6 +76,11 @@ describe('buildUpdateBody', () => {
   it('omits fields that are not provided', () => {
     expect(buildUpdateBody({ menuOrder: 0 })).toEqual({ menu_order: 0 });
     expect(buildUpdateBody({})).toEqual({});
+  });
+
+  it('maps featuredMedia to featured_media, including 0 (which removes it)', () => {
+    expect(buildUpdateBody({ featuredMedia: 42 })).toEqual({ featured_media: 42 });
+    expect(buildUpdateBody({ featuredMedia: 0 })).toEqual({ featured_media: 0 });
   });
 });
 
@@ -207,5 +213,91 @@ describe('normalizePost relation fields', () => {
     const post = normalizePost(raw({}));
     expect(post.parent).toBeUndefined();
     expect(post.parentType).toBeUndefined();
+  });
+});
+
+describe('normalizePost featured media', () => {
+  function raw(featuredMedia?: number): WpPostResponse {
+    return {
+      id: 5,
+      type: 'post',
+      status: 'publish',
+      title: { rendered: 'r', raw: 'Post 5' },
+      menu_order: 0,
+      meta: {},
+      ...(featuredMedia !== undefined ? { featured_media: featuredMedia } : {}),
+    };
+  }
+
+  it('sets featuredMedia from a positive featured_media', () => {
+    expect(normalizePost(raw(42)).featuredMedia).toBe(42);
+  });
+
+  it('treats 0 as no featured image', () => {
+    expect(normalizePost(raw(0)).featuredMedia).toBeUndefined();
+  });
+
+  it('leaves featuredMedia unset when the field is absent', () => {
+    expect(normalizePost(raw()).featuredMedia).toBeUndefined();
+  });
+});
+
+describe('normalizeMedia', () => {
+  it('extracts id, urls, title, and mime from a raw media item', () => {
+    expect(
+      normalizeMedia({
+        id: 12,
+        source_url: 'https://example.com/wp-content/uploads/photo.png',
+        mime_type: 'image/png',
+        title: { rendered: 'Photo' },
+        media_details: {
+          sizes: {
+            thumbnail: { source_url: 'https://example.com/wp-content/uploads/photo-150x150.png' },
+            medium: { source_url: 'https://example.com/wp-content/uploads/photo-300x300.png' },
+          },
+        },
+      }),
+    ).toEqual({
+      id: 12,
+      sourceUrl: 'https://example.com/wp-content/uploads/photo.png',
+      thumbnailUrl: 'https://example.com/wp-content/uploads/photo-150x150.png',
+      title: 'Photo',
+      mimeType: 'image/png',
+    });
+  });
+
+  it('falls back to the source URL when no thumbnail size exists', () => {
+    const media = normalizeMedia({
+      id: 3,
+      source_url: 'https://example.com/a.jpg',
+      title: { rendered: 'A' },
+    });
+    expect(media.thumbnailUrl).toBe('https://example.com/a.jpg');
+  });
+
+  it('falls back to the medium size when no thumbnail size exists', () => {
+    const media = normalizeMedia({
+      id: 4,
+      source_url: 'https://example.com/b.jpg',
+      media_details: { sizes: { medium: { source_url: 'https://example.com/b-300.jpg' } } },
+    });
+    expect(media.thumbnailUrl).toBe('https://example.com/b-300.jpg');
+  });
+
+  it('degrades malformed input to empty fields rather than throwing', () => {
+    expect(normalizeMedia(null)).toEqual({
+      id: 0,
+      sourceUrl: '',
+      thumbnailUrl: '',
+      title: '',
+      mimeType: '',
+    });
+    expect(normalizeMedia({ id: 'x', title: 'not-an-object' })).toEqual({
+      id: 0,
+      sourceUrl: '',
+      thumbnailUrl: '',
+      title: '',
+      mimeType: '',
+    });
   });
 });

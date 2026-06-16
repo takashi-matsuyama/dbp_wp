@@ -28,6 +28,9 @@ const MIME: Record<string, string> = {
 
 const MAX_BODY_BYTES = 1_000_000;
 
+/** Upload bodies (binary media) get a larger, separate cap than JSON request bodies. */
+const MAX_MEDIA_BYTES = 25_000_000;
+
 /** Mutable connection state, held in memory only (never written to disk). */
 export interface ConnectionState {
   credentials: WpCredentials | null;
@@ -84,6 +87,149 @@ async function readJsonBody(req: IncomingMessage): Promise<unknown> {
     });
     req.on('error', reject);
   });
+}
+
+/** Read a raw request body up to `maxBytes`, rejecting (and aborting) when it is exceeded. */
+async function readRawBody(req: IncomingMessage, maxBytes: number): Promise<Buffer> {
+  return new Promise((resolvePromise, reject) => {
+    let size = 0;
+    const chunks: Buffer[] = [];
+    req.on('data', (chunk: Buffer) => {
+      size += chunk.length;
+      if (size > maxBytes) {
+        reject(new Error('Request body too large'));
+        req.destroy();
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on('end', () => resolvePromise(Buffer.concat(chunks)));
+    req.on('error', reject);
+  });
+}
+
+/**
+ * Decode the `X-DBP-Filename` header (sent percent-encoded so non-ASCII filenames survive a
+ * header round-trip). Returns null when the header is missing or empty.
+ */
+function decodeFilenameHeader(value: string | string[] | undefined): string | null {
+  const raw = Array.isArray(value) ? value[0] : value;
+  if (typeof raw !== 'string' || raw.trim() === '') {
+    return null;
+  }
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    return raw; // tolerate a non-encoded header rather than rejecting the upload
+  }
+}
+
+/**
+ * Upload an image to the media library. The browser sends raw file bytes (not JSON), so this
+ * route does not use the JSON content-type guard; instead the required `X-DBP-Filename`
+ * custom header forces a CORS preflight (which the server never grants), restoring the
+ * simple-request CSRF defense. The loopback-Host and Sec-Fetch-Site guards still apply.
+ */
+async function handleMediaUpload(
+  req: IncomingMessage,
+  res: ServerResponse,
+  options: ServerOptions,
+): Promise<void> {
+  const filename = decodeFilenameHeader(req.headers['x-dbp-filename']);
+  if (filename === null) {
+    sendJson(res, 400, { error: 'Missing or invalid X-DBP-Filename header.' });
+    return;
+  }
+  const credentials = options.state.credentials;
+  if (!credentials) {
+    sendJson(res, 409, { error: 'Not connected' });
+    return;
+  }
+
+  let bytes: Buffer;
+  try {
+    bytes = await readRawBody(req, MAX_MEDIA_BYTES);
+  } catch (e) {
+    const tooLarge = e instanceof Error && e.message.includes('too large');
+    sendJson(res, tooLarge ? 413 : 400, {
+      error: tooLarge ? 'File too large (max 25 MB).' : 'Could not read upload.',
+    });
+    return;
+  }
+  if (bytes.length === 0) {
+    sendJson(res, 400, { error: 'Empty upload.' });
+    return;
+  }
+
+  const contentType = req.headers['content-type'];
+  const mimeType = typeof contentType === 'string' ? contentType.split(';')[0]?.trim() : undefined;
+  try {
+    const media = await new WpClient(credentials).uploadMedia(bytes, filename, mimeType);
+    sendJson(res, 200, { media });
+  } catch (e) {
+    if (!res.headersSent) {
+      sendJson(res, 502, { error: e instanceof Error ? e.message : 'Upload failed' });
+    }
+  }
+}
+
+/**
+ * List image attachments for the media picker, or resolve specific ids (`?include=`) to
+ * fill featured-image thumbnails. Both are core REST calls (no connector needed).
+ */
+async function handleMediaList(
+  req: IncomingMessage,
+  res: ServerResponse,
+  url: URL,
+  options: ServerOptions,
+): Promise<void> {
+  const credentials = options.state.credentials;
+  if (!credentials) {
+    sendJson(res, 200, { items: [], totalPages: 1, unconfigured: true });
+    return;
+  }
+  const client = new WpClient(credentials);
+  try {
+    const include = url.searchParams.get('include');
+    if (include !== null) {
+      const ids = include
+        .split(',')
+        .map((s) => Number.parseInt(s, 10))
+        .filter((n) => Number.isInteger(n));
+      sendJson(res, 200, { items: await client.resolveMedia(ids) });
+      return;
+    }
+    const pageRaw = url.searchParams.get('page');
+    const page = pageRaw ? Number.parseInt(pageRaw, 10) : undefined;
+    const search = url.searchParams.get('search') ?? undefined;
+    const result = await client.listMedia({
+      ...(page && page > 0 ? { page } : {}),
+      ...(search ? { search } : {}),
+    });
+    sendJson(res, 200, { items: result.items, totalPages: result.totalPages });
+  } catch (e) {
+    if (!res.headersSent) {
+      sendJson(res, 502, { error: e instanceof Error ? e.message : 'Upstream request failed' });
+    }
+  }
+}
+
+/** Dispatch `/api/media`: POST uploads an image, GET lists/resolves the media library. */
+async function handleMedia(
+  req: IncomingMessage,
+  res: ServerResponse,
+  url: URL,
+  options: ServerOptions,
+): Promise<void> {
+  if (req.method === 'POST') {
+    await handleMediaUpload(req, res, options);
+    return;
+  }
+  if (req.method === 'GET') {
+    await handleMediaList(req, res, url, options);
+    return;
+  }
+  sendJson(res, 405, { error: 'Method not allowed' });
 }
 
 async function handlePosts(
@@ -580,6 +726,10 @@ async function handleApiRoutes(
   }
   if (url.pathname === '/api/print/posts') {
     await handlePrintPosts(req, res, url, options);
+    return;
+  }
+  if (url.pathname === '/api/media') {
+    await handleMedia(req, res, url, options);
     return;
   }
   if (url.pathname === '/api/posts') {

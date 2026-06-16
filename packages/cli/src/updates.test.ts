@@ -49,6 +49,18 @@ describe('parseBatchUpdates', () => {
     ]);
   });
 
+  it('parses featuredMedia (incl. 0 to remove) and rejects bad values', () => {
+    expect(parseBatchUpdates({ updates: [{ id: 1, featuredMedia: 42 }] })).toEqual([
+      { id: 1, fields: { featuredMedia: 42 } },
+    ]);
+    expect(parseBatchUpdates({ updates: [{ id: 1, featuredMedia: 0 }] })).toEqual([
+      { id: 1, fields: { featuredMedia: 0 } },
+    ]);
+    expect(parseBatchUpdates({ updates: [{ id: 1, featuredMedia: -1 }] })).toBeNull();
+    expect(parseBatchUpdates({ updates: [{ id: 1, featuredMedia: 1.5 }] })).toBeNull();
+    expect(parseBatchUpdates({ updates: [{ id: 1, featuredMedia: 'x' }] })).toBeNull();
+  });
+
   it('parses meta alongside fields and as a meta-only row', () => {
     expect(
       parseBatchUpdates({
