@@ -20,3 +20,5 @@ export const savePosts = impl.savePosts;
 export const importPosts = impl.importPosts;
 export const bulkDeleteMeta = impl.bulkDeleteMeta;
 export const fetchPrintRecords = impl.fetchPrintRecords;
+export const setRelation = impl.setRelation;
+export const clearRelation = impl.clearRelation;

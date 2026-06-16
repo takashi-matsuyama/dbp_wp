@@ -26,6 +26,9 @@ interface DemoPost {
   featuredImageUrl: string;
   meta: Record<string, string>;
   tax: Record<string, string[]>;
+  /** Parent post id (relation MVP); the demo has one type, so parents are same-type. */
+  parent?: number;
+  parentType?: string;
 }
 
 // A tiny inline placeholder so `{{ featuredImageUrl }}` never makes a network request.
@@ -55,6 +58,9 @@ function seed(): DemoPost[] {
       featuredImageUrl: PLACEHOLDER_IMAGE,
       meta: { price: '980', sku: 'DBP-002' },
       tax: { category: ['Guides'], post_tag: ['formulas'] },
+      // Seeded relation so the demo shows a parent and derived children out of the box.
+      parent: 1,
+      parentType: 'posts',
     },
     {
       id: 3,
@@ -66,6 +72,8 @@ function seed(): DemoPost[] {
       featuredImageUrl: PLACEHOLDER_IMAGE,
       meta: { price: '1500', sku: 'DBP-003' },
       tax: { category: ['Reference'], post_tag: ['import'] },
+      parent: 1,
+      parentType: 'posts',
     },
     {
       id: 4,
@@ -87,7 +95,7 @@ let nextId = 5;
 function toWpPost(d: DemoPost): WpPost {
   // The demo presents as a connector-active site, so meta lives under dbpWpMeta (the
   // spreadsheet's editable meta columns).
-  return {
+  const post: WpPost = {
     id: d.id,
     type: 'post',
     status: d.status,
@@ -96,6 +104,13 @@ function toWpPost(d: DemoPost): WpPost {
     meta: {},
     dbpWpMeta: { ...d.meta },
   };
+  if (d.parent !== undefined) {
+    post.parent = d.parent;
+  }
+  if (d.parentType !== undefined) {
+    post.parentType = d.parentType;
+  }
+  return post;
 }
 
 function toPrintRecord(d: DemoPost): PrintRecord {
@@ -209,4 +224,32 @@ export function bulkDeleteMeta(deletes: MetaDeletion[]): Promise<UpdateResult[]>
     results.push({ id: del.id, ok: true });
   }
   return Promise.resolve(results);
+}
+
+export function setRelation(
+  childId: number,
+  _childType: string,
+  parentId: number,
+  parentType: string,
+): Promise<WpPost> {
+  const post = find(childId);
+  if (!post) {
+    return Promise.reject(new Error('Not found in demo data'));
+  }
+  if (parentId === childId) {
+    return Promise.reject(new Error('A post cannot be its own parent.'));
+  }
+  post.parent = parentId;
+  post.parentType = parentType;
+  return Promise.resolve(toWpPost(post));
+}
+
+export function clearRelation(childId: number, _childType: string): Promise<WpPost> {
+  const post = find(childId);
+  if (!post) {
+    return Promise.reject(new Error('Not found in demo data'));
+  }
+  delete post.parent;
+  delete post.parentType;
+  return Promise.resolve(toWpPost(post));
 }

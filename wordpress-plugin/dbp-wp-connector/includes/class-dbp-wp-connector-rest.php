@@ -22,13 +22,20 @@ if ( ! defined( 'ABSPATH' ) ) {
  *   provided keys.
  * - A `DELETE /dbp-wp/v1/posts/<id>/meta` route deletes named meta keys on a
  *   single post (there is no core equivalent).
+ * - Two parent-relation meta keys (`_dbp_wp_parent`, `_dbp_wp_parent_type`) are
+ *   registered with `register_post_meta()` so they ride the standard core `meta`
+ *   field (read/write) rather than the `dbp_wp_meta` field above. They are
+ *   `_`-prefixed (protected), so this explicit registration — with an
+ *   `auth_callback` that delegates to the same `edit_post` capability — is exactly
+ *   the escape hatch the protected-meta note below describes.
  *
  * Protected/internal meta (keys for which `is_protected_meta()` is true — by
  * default `_`-prefixed keys such as `_edit_lock`, `_thumbnail_id`, `_wp_*`) is
- * never read, written, or deleted through the connector, so an `edit_post`-capable
- * user cannot use it as a back door to core/plugin internals. (A future feature
- * that needs its own protected keys should register them with `register_meta()`
- * and an explicit `auth_callback` rather than relax this filter.)
+ * never read, written, or deleted through the `dbp_wp_meta` field or the delete
+ * route, so an `edit_post`-capable user cannot use them as a back door to
+ * core/plugin internals. A feature that needs its own protected keys registers
+ * them with `register_post_meta()` and an explicit `auth_callback` rather than
+ * relaxing that filter (see the parent-relation keys above).
  *
  * The connector adds no authentication. Requests authenticate with WordPress core
  * Application Passwords, and every operation is gated by the same `edit_post`
@@ -51,12 +58,27 @@ class DBP_WP_Connector_REST {
 	const META_FIELD = 'dbp_wp_meta';
 
 	/**
+	 * Meta key holding a child post's parent post ID (single source of truth).
+	 *
+	 * @var string
+	 */
+	const PARENT_META = '_dbp_wp_parent';
+
+	/**
+	 * Meta key holding the REST route base of the parent post's type.
+	 *
+	 * @var string
+	 */
+	const PARENT_TYPE_META = '_dbp_wp_parent_type';
+
+	/**
 	 * Hook the connector's registration callbacks onto `rest_api_init`.
 	 *
 	 * @return void
 	 */
 	public function register() {
 		add_action( 'rest_api_init', array( $this, 'register_meta_field' ) );
+		add_action( 'rest_api_init', array( $this, 'register_relation_meta' ) );
 		add_action( 'rest_api_init', array( $this, 'register_routes' ) );
 	}
 
@@ -85,6 +107,77 @@ class DBP_WP_Connector_REST {
 				)
 			);
 		}
+	}
+
+	/**
+	 * Register the parent-relation meta keys on every REST-enabled post type.
+	 *
+	 * Unlike `dbp_wp_meta`, these `_`-prefixed (protected) keys are registered with
+	 * `register_post_meta()` so they ride the standard core `meta` field: the app reads
+	 * a child's parent from `meta._dbp_wp_parent` and writes it the same way. Each key is
+	 * single-valued, exposed in REST, sanitized (a parent ID through `absint`, a parent
+	 * type through the REST route-segment allowlist), and gated by `edit_post` via the
+	 * `auth_callback`. Clearing a relation is a standard REST meta delete (sending `null`).
+	 *
+	 * @return void
+	 */
+	public function register_relation_meta() {
+		$post_types = get_post_types( array( 'show_in_rest' => true ), 'names' );
+		foreach ( $post_types as $post_type ) {
+			register_post_meta(
+				$post_type,
+				self::PARENT_META,
+				array(
+					'single'            => true,
+					'show_in_rest'      => true,
+					'type'              => 'integer',
+					'sanitize_callback' => 'absint',
+					'auth_callback'     => array( $this, 'can_edit_post_meta' ),
+				)
+			);
+			register_post_meta(
+				$post_type,
+				self::PARENT_TYPE_META,
+				array(
+					'single'            => true,
+					'show_in_rest'      => true,
+					'type'              => 'string',
+					'sanitize_callback' => array( $this, 'sanitize_route_segment' ),
+					'auth_callback'     => array( $this, 'can_edit_post_meta' ),
+				)
+			);
+		}
+	}
+
+	/**
+	 * Authorize a read/write of a registered relation meta key.
+	 *
+	 * Used as the `auth_callback` for `register_post_meta()`: it ignores the default
+	 * decision and delegates to the same `edit_post` capability the connector uses
+	 * everywhere else, so relation editing follows core's per-post permissions.
+	 *
+	 * @param bool   $allowed   Whether the key can be managed (ignored; we decide here).
+	 * @param string $meta_key  The meta key being checked (unused).
+	 * @param int    $object_id The post the meta belongs to.
+	 * @return bool True when the current user may edit the target post.
+	 */
+	public function can_edit_post_meta( $allowed, $meta_key, $object_id ) {
+		unset( $allowed, $meta_key );
+		return current_user_can( 'edit_post', (int) $object_id );
+	}
+
+	/**
+	 * Sanitize a parent post-type value to the REST route-segment allowlist.
+	 *
+	 * Mirrors the app's `ROUTE_SEGMENT` check (`^[a-z0-9_-]+$`); anything else collapses
+	 * to an empty string so a malformed type is never stored.
+	 *
+	 * @param mixed $value Submitted meta value.
+	 * @return string The value when it is a valid route segment, otherwise ''.
+	 */
+	public function sanitize_route_segment( $value ) {
+		$value = is_string( $value ) ? $value : '';
+		return preg_match( '/^[a-z0-9_-]+$/i', $value ) ? $value : '';
 	}
 
 	/**

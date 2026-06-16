@@ -2,7 +2,7 @@ import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { extname, join, relative, resolve } from 'node:path';
-import { WpClient, WpRequestError, type WpCredentials } from '@dbp-wp/core';
+import { RelationError, WpClient, WpRequestError, type WpCredentials } from '@dbp-wp/core';
 import { parseCredentialsInput } from './config';
 import { isAllowedHost, isCrossSiteRequest, isJsonContentType } from './host';
 import {
@@ -11,6 +11,7 @@ import {
   parseImportCreates,
   parseMetaDelete,
   parsePostTypeSlug,
+  parseRelation,
 } from './updates';
 
 const MIME: Record<string, string> = {
@@ -386,6 +387,73 @@ async function handleBulkMetaDelete(
   sendJson(res, 200, { results });
 }
 
+async function handleRelation(
+  req: IncomingMessage,
+  res: ServerResponse,
+  options: ServerOptions,
+): Promise<void> {
+  if (req.method !== 'POST') {
+    sendJson(res, 405, { error: 'Method not allowed' });
+    return;
+  }
+  if (!isJsonContentType(req.headers['content-type'])) {
+    sendJson(res, 415, { error: 'Content-Type must be application/json.' });
+    return;
+  }
+  const credentials = options.state.credentials;
+  if (!credentials) {
+    sendJson(res, 409, { error: 'Not connected' });
+    return;
+  }
+
+  // Relation meta is registered by the companion plugin; without it WordPress silently
+  // ignores the keys, so a write would falsely look successful. Require the connector and
+  // surface a clear 409. Probe lazily for connections that were never probed (env-seeded).
+  if (options.state.connectorAvailable === null) {
+    try {
+      options.state.connectorAvailable = await new WpClient(credentials).detectConnector();
+    } catch {
+      options.state.connectorAvailable = false;
+    }
+  }
+  if (!options.state.connectorAvailable) {
+    sendJson(res, 409, {
+      error: 'The companion plugin is required to edit relations, but it was not found on the site.',
+    });
+    return;
+  }
+
+  let body: unknown;
+  try {
+    body = await readJsonBody(req);
+  } catch (e) {
+    sendJson(res, 400, { error: e instanceof Error ? e.message : 'Invalid request body' });
+    return;
+  }
+  const request = parseRelation(body);
+  if (!request) {
+    sendJson(res, 400, { error: 'Invalid relation payload.' });
+    return;
+  }
+
+  try {
+    const client = new WpClient(credentials);
+    const post = request.relation
+      ? await client.setRelation(request.childId, request.childType, request.relation)
+      : await client.clearRelation(request.childId, request.childType);
+    sendJson(res, 200, { post });
+  } catch (e) {
+    if (!res.headersSent) {
+      // A rejected assignment (bad id/type, self-parent) is the caller's fault → 400.
+      if (e instanceof RelationError) {
+        sendJson(res, 400, { error: e.message });
+      } else {
+        sendJson(res, 502, { error: e instanceof Error ? e.message : 'Relation update failed' });
+      }
+    }
+  }
+}
+
 async function handleConnection(
   req: IncomingMessage,
   res: ServerResponse,
@@ -504,6 +572,10 @@ async function handleApiRoutes(
   }
   if (url.pathname === '/api/posts/meta') {
     await handleMetaDelete(req, res, options);
+    return;
+  }
+  if (url.pathname === '/api/relation') {
+    await handleRelation(req, res, options);
     return;
   }
   if (url.pathname === '/api/print/posts') {

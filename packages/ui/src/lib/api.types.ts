@@ -86,4 +86,13 @@ export interface ApiImpl {
   importPosts(creates: ImportCreateInput[], type?: string): Promise<ImportResult[]>;
   bulkDeleteMeta(deletes: MetaDeletion[]): Promise<UpdateResult[]>;
   fetchPrintRecords(query?: ListPostsQuery): Promise<PrintRecordsResponse>;
+  /** Set a child post's parent (companion plugin required). Returns the updated post. */
+  setRelation(
+    childId: number,
+    childType: string,
+    parentId: number,
+    parentType: string,
+  ): Promise<WpPost>;
+  /** Clear a child post's parent (companion plugin required). Returns the updated post. */
+  clearRelation(childId: number, childType: string): Promise<WpPost>;
 }

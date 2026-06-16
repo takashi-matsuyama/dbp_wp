@@ -1,4 +1,11 @@
 import { buildPrintRecord, type PrintRecord } from './print';
+import {
+  PARENT_META_KEY,
+  PARENT_TYPE_META_KEY,
+  buildClearRelationMeta,
+  buildSetRelationMeta,
+  type RelationTarget,
+} from './relation';
 import type {
   DeleteMetaResult,
   ListPostsParams,
@@ -229,6 +236,41 @@ export class WpClient {
   }
 
   /**
+   * Set a child post's parent relation. The relation keys ride the standard core `meta`
+   * field (the connector registers them with `register_post_meta`), so this is a distinct
+   * path from {@link WpClient.updatePostMeta} (which uses the connector's `dbp_wp_meta`
+   * field). Validates the assignment (positive id, valid type, no self-parent) before
+   * writing. Requires the connector; without it WordPress silently ignores the keys.
+   */
+  async setRelation(
+    childId: number,
+    childType: string,
+    relation: RelationTarget,
+  ): Promise<WpPost> {
+    assertPostId(childId);
+    assertRouteSegment(childType);
+    const raw = await this.request<WpPostResponse>(
+      `/wp/v2/${childType}/${String(childId)}?context=edit`,
+      { method: 'POST', body: JSON.stringify({ meta: buildSetRelationMeta(childId, relation) }) },
+    );
+    return normalizePost(raw);
+  }
+
+  /**
+   * Clear a child post's parent relation. Sends `null` for both relation keys, which makes
+   * WordPress delete them (no stale `0`/empty value left behind). Requires the connector.
+   */
+  async clearRelation(childId: number, childType: string): Promise<WpPost> {
+    assertPostId(childId);
+    assertRouteSegment(childType);
+    const raw = await this.request<WpPostResponse>(
+      `/wp/v2/${childType}/${String(childId)}?context=edit`,
+      { method: 'POST', body: JSON.stringify({ meta: buildClearRelationMeta() }) },
+    );
+    return normalizePost(raw);
+  }
+
+  /**
    * Detect whether the companion plugin is active by checking the REST index
    * (`/wp-json/`) for the connector's namespace. Throws on a failed request; a caller
    * that wants a non-fatal probe should treat a thrown error as "not available".
@@ -349,6 +391,16 @@ function normalizePost(raw: WpPostResponse): WpPost {
   };
   if (raw.dbp_wp_meta !== undefined) {
     post.dbpWpMeta = raw.dbp_wp_meta;
+  }
+  // Parent relation rides the standard `meta` field (registered by the connector). A
+  // missing/zero id or empty type reads as "no parent", so only a complete pair is set.
+  const rawParent = raw.meta?.[PARENT_META_KEY];
+  if (typeof rawParent === 'number' && Number.isInteger(rawParent) && rawParent > 0) {
+    post.parent = rawParent;
+  }
+  const rawParentType = raw.meta?.[PARENT_TYPE_META_KEY];
+  if (typeof rawParentType === 'string' && rawParentType !== '') {
+    post.parentType = rawParentType;
   }
   return post;
 }

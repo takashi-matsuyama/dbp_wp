@@ -10,7 +10,7 @@ import type {
   PrintRecordsResponse,
   UpdateResult,
 } from './api.types';
-import type { WpPostType } from '@dbp-wp/core';
+import type { WpPost, WpPostType } from '@dbp-wp/core';
 
 // The CLI-backed data layer. The UI talks only to the local CLI server (`/api/...`), never
 // to WordPress directly, so the browser never holds credentials and is not subject to
@@ -157,6 +157,38 @@ export async function importPosts(
     throw new Error(data.error ?? `Import failed: ${res.status}`);
   }
   return Array.isArray(data.results) ? data.results : [];
+}
+
+/**
+ * Set a child post's parent via the CLI's `/api/relation` route (companion plugin
+ * required). The relation rides the standard `meta` field server-side.
+ */
+export async function setRelation(
+  childId: number,
+  childType: string,
+  parentId: number,
+  parentType: string,
+): Promise<WpPost> {
+  return relationRequest({ childId, childType, parentId, parentType }, 'Set relation');
+}
+
+/** Clear a child post's parent (sends `parentId: null`, which deletes the relation meta). */
+export async function clearRelation(childId: number, childType: string): Promise<WpPost> {
+  return relationRequest({ childId, childType, parentId: null }, 'Clear relation');
+}
+
+/** Shared POST to `/api/relation`; the CLI sets or clears based on `parentId`. */
+async function relationRequest(body: Record<string, unknown>, label: string): Promise<WpPost> {
+  const res = await fetch('/api/relation', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const data = (await res.json().catch(() => ({}))) as { post?: WpPost; error?: string };
+  if (!res.ok) {
+    throw new Error(data.error ?? `${label} failed: ${res.status}`);
+  }
+  return data.post as WpPost;
 }
 
 /** Delete meta keys from many posts in one request (companion plugin required). */

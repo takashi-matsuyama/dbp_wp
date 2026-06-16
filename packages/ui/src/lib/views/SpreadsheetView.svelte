@@ -1,17 +1,27 @@
 <script lang="ts">
-  import type { WpPost } from '@dbp-wp/core';
-  import { bulkDeleteMeta, savePosts, type PostUpdate } from '../api';
+  import type { WpPost, WpPostType } from '@dbp-wp/core';
+  import { deriveChildren, getRelation } from '@dbp-wp/core';
+  import {
+    bulkDeleteMeta,
+    clearRelation,
+    fetchPosts,
+    savePosts,
+    setRelation,
+    type PostUpdate,
+  } from '../api';
   import { computeMenuOrders } from '../formula';
 
   let {
     posts,
     type,
     connectorAvailable,
+    postTypes,
     onsaved,
   }: {
     posts: WpPost[];
     type: string;
     connectorAvailable: boolean;
+    postTypes: WpPostType[];
     onsaved: () => void | Promise<void>;
   } = $props();
 
@@ -164,6 +174,107 @@
     }
   }
 
+  // --- Parent/child relations (connector required) ---
+  // Relations write immediately (one request per Set/Clear), independent of the batch Save:
+  // the relation keys ride the standard `meta` field, a different path from the meta columns.
+
+  interface ParentOption {
+    id: number;
+    title: string;
+  }
+
+  let relationRow = $state<number | null>(null); // child post id whose parent editor is open
+  let relParentType = $state('');
+  let relParentId = $state<number | null>(null);
+  // Candidate parents per post type, fetched lazily for the picker (cross-type allowed).
+  let relCandidates = $state<Record<string, ParentOption[]>>({});
+  let relLoadingType = $state<string | null>(null);
+  let relBusy = $state(false);
+  let relError = $state<string | null>(null);
+
+  // Types a parent may belong to: the site's REST types, or the current type as a fallback
+  // when the type list could not be loaded (so same-type parenting still works).
+  const parentTypeOptions = $derived<WpPostType[]>(
+    postTypes.length > 0 ? postTypes : [{ slug: type, restBase: type, name: type }],
+  );
+
+  async function ensureCandidates(parentType: string): Promise<void> {
+    if (relCandidates[parentType] !== undefined || relLoadingType === parentType) {
+      return; // already cached or in flight
+    }
+    relLoadingType = parentType;
+    try {
+      const res = await fetchPosts({ type: parentType });
+      relCandidates = {
+        ...relCandidates,
+        [parentType]: res.posts.map((p) => ({ id: p.id, title: p.title })),
+      };
+    } catch (e) {
+      relError = e instanceof Error ? e.message : String(e);
+    } finally {
+      relLoadingType = null;
+    }
+  }
+
+  function openRelationEditor(post: WpPost): void {
+    const current = getRelation(post);
+    relationRow = post.id;
+    relError = null;
+    relParentType = current?.parentType ?? parentTypeOptions[0]?.restBase ?? type;
+    relParentId = current?.parentId ?? null;
+    void ensureCandidates(relParentType);
+  }
+
+  function closeRelationEditor(): void {
+    relationRow = null;
+    relError = null;
+  }
+
+  function changeRelParentType(next: string): void {
+    relParentType = next;
+    relParentId = null; // a parent from the previous type no longer applies
+    void ensureCandidates(next);
+  }
+
+  // Candidate parents for the open editor, excluding the child itself (no self-parent).
+  function candidatesFor(childId: number): ParentOption[] {
+    return (relCandidates[relParentType] ?? []).filter((c) => c.id !== childId);
+  }
+
+  async function applySetRelation(childId: number): Promise<void> {
+    if (relBusy || relParentId === null) {
+      return;
+    }
+    relBusy = true;
+    relError = null;
+    try {
+      await setRelation(childId, type, relParentId, relParentType);
+      closeRelationEditor();
+      await onsaved();
+    } catch (e) {
+      relError = e instanceof Error ? e.message : String(e);
+    } finally {
+      relBusy = false;
+    }
+  }
+
+  async function applyClearRelation(childId: number): Promise<void> {
+    if (relBusy) {
+      return;
+    }
+    relBusy = true;
+    relError = null;
+    try {
+      await clearRelation(childId, type);
+      closeRelationEditor();
+      await onsaved();
+    } catch (e) {
+      relError = e instanceof Error ? e.message : String(e);
+    } finally {
+      relBusy = false;
+    }
+  }
+
   function isChanged(post: WpPost): boolean {
     const draft = drafts[post.id];
     const fieldChanged =
@@ -257,7 +368,7 @@
   <p class="empty">No rows yet.</p>
 {:else}
   <div class="sheet-toolbar">
-    <button onclick={save} disabled={saving || deleteBusy || changed.length === 0}>
+    <button onclick={save} disabled={saving || deleteBusy || relBusy || changed.length === 0}>
       {saving ? 'Saving…' : `Save ${changed.length} change${changed.length === 1 ? '' : 's'}`}
     </button>
     {#if error}<span class="error">{error}</span>{/if}
@@ -300,7 +411,8 @@
     </div>
   {:else}
     <p class="restricted-note">
-      Custom field editing needs the DBP WP Connector plugin. Standard fields are editable.
+      Custom field editing and parent/child relations need the DBP WP Connector plugin.
+      Standard fields are editable.
     </p>
   {/if}
 
@@ -310,6 +422,10 @@
         <th>ID</th>
         <th>Title</th>
         <th>Menu order</th>
+        {#if connectorAvailable}
+          <th>Parent</th>
+          <th>Children</th>
+        {/if}
         {#each metaColumns as key (key)}
           <th class="meta-col">
             <span class="meta-key">{key}</span>
@@ -359,6 +475,74 @@
               oninput={(e) => setMenuOrder(post, (e.currentTarget as HTMLInputElement).value)}
             />
           </td>
+          {#if connectorAvailable}
+            <td class="relation-cell">
+              {#if relationRow === post.id}
+                <div class="relation-editor">
+                  <select
+                    value={relParentType}
+                    disabled={relBusy}
+                    onchange={(e) => changeRelParentType((e.currentTarget as HTMLSelectElement).value)}
+                  >
+                    {#each parentTypeOptions as pt (pt.restBase)}
+                      <option value={pt.restBase}>{pt.name}</option>
+                    {/each}
+                  </select>
+                  {#if relLoadingType === relParentType}
+                    <span class="hint">Loading…</span>
+                  {:else}
+                    <select
+                      value={relParentId === null ? '' : String(relParentId)}
+                      disabled={relBusy}
+                      onchange={(e) => {
+                        const v = (e.currentTarget as HTMLSelectElement).value;
+                        relParentId = v === '' ? null : Number(v);
+                      }}
+                    >
+                      <option value="">Select parent…</option>
+                      {#each candidatesFor(post.id) as c (c.id)}
+                        <option value={String(c.id)}>{c.title} (#{c.id})</option>
+                      {/each}
+                    </select>
+                  {/if}
+                  <button onclick={() => applySetRelation(post.id)} disabled={relBusy || relParentId === null}>
+                    {relBusy ? 'Saving…' : 'Set'}
+                  </button>
+                  {#if getRelation(post)}
+                    <button onclick={() => applyClearRelation(post.id)} disabled={relBusy}>Clear</button>
+                  {/if}
+                  <button onclick={closeRelationEditor} disabled={relBusy}>Cancel</button>
+                  {#if relError}<span class="error">{relError}</span>{/if}
+                </div>
+              {:else if getRelation(post)}
+                <span class="parent-ref">{getRelation(post)?.parentType} #{getRelation(post)?.parentId}</span>
+                <button
+                  class="rel-edit"
+                  onclick={() => openRelationEditor(post)}
+                  disabled={saving || deleteBusy || relBusy}>Edit</button
+                >
+              {:else}
+                <span class="parent-none">—</span>
+                <button
+                  class="rel-edit"
+                  onclick={() => openRelationEditor(post)}
+                  disabled={saving || deleteBusy || relBusy}>Set parent</button
+                >
+              {/if}
+            </td>
+            <td class="children-cell">
+              {#if deriveChildren(posts, post.id).length > 0}
+                <span
+                  class="child-count"
+                  title={deriveChildren(posts, post.id)
+                    .map((c) => `#${c.id} ${c.title}`)
+                    .join('\n')}>{deriveChildren(posts, post.id).length}</span
+                >
+              {:else}
+                <span class="parent-none">—</span>
+              {/if}
+            </td>
+          {/if}
           {#each metaColumns as key (key)}
             <td class:changed-cell={isMetaChanged(post, key)}>
               <input
@@ -408,5 +592,32 @@
   }
   .changed-cell input {
     background: rgba(255, 215, 0, 0.18);
+  }
+  .relation-cell {
+    white-space: nowrap;
+  }
+  .relation-editor {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+  }
+  .relation-editor .error {
+    flex-basis: 100%;
+  }
+  .rel-edit {
+    margin-left: 0.35rem;
+    padding: 0 0.4rem;
+    line-height: 1.4;
+    cursor: pointer;
+  }
+  .parent-none {
+    opacity: 0.5;
+  }
+  .children-cell {
+    text-align: center;
+  }
+  .child-count {
+    cursor: help;
   }
 </style>

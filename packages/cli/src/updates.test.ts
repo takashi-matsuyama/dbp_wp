@@ -5,6 +5,7 @@ import {
   parseImportCreates,
   parseMetaDelete,
   parsePostTypeSlug,
+  parseRelation,
 } from './updates';
 
 describe('parseBatchUpdates', () => {
@@ -190,5 +191,52 @@ describe('parsePostTypeSlug', () => {
     expect(parsePostTypeSlug('..')).toBeNull();
     expect(parsePostTypeSlug('a.b')).toBeNull();
     expect(parsePostTypeSlug(5)).toBeNull();
+  });
+});
+
+describe('parseRelation', () => {
+  it('parses a set request with a parent id and type', () => {
+    expect(parseRelation({ childId: 2, childType: 'posts', parentId: 7, parentType: 'pages' })).toEqual({
+      childId: 2,
+      childType: 'posts',
+      relation: { parentId: 7, parentType: 'pages' },
+    });
+  });
+
+  it('defaults childType to posts when absent', () => {
+    expect(parseRelation({ childId: 2, parentId: 7, parentType: 'pages' })).toEqual({
+      childId: 2,
+      childType: 'posts',
+      relation: { parentId: 7, parentType: 'pages' },
+    });
+  });
+
+  it('parses a clear request (parentId null)', () => {
+    expect(parseRelation({ childId: 2, childType: 'posts', parentId: null })).toEqual({
+      childId: 2,
+      childType: 'posts',
+      relation: null,
+    });
+  });
+
+  it('requires parentType when setting a parent', () => {
+    expect(parseRelation({ childId: 2, parentId: 7 })).toBeNull();
+    expect(parseRelation({ childId: 2, parentId: 7, parentType: 'bad type' })).toBeNull();
+    expect(parseRelation({ childId: 2, parentId: 7, parentType: 'a/b' })).toBeNull();
+  });
+
+  it('rejects a missing/invalid childId or a non-null, non-positive parentId', () => {
+    expect(parseRelation({ parentId: 7, parentType: 'pages' })).toBeNull();
+    expect(parseRelation({ childId: 0, parentId: 7, parentType: 'pages' })).toBeNull();
+    expect(parseRelation({ childId: 2, parentId: 0, parentType: 'pages' })).toBeNull();
+    expect(parseRelation({ childId: 2, parentId: -1, parentType: 'pages' })).toBeNull();
+    expect(parseRelation({ childId: 2, parentId: 1.5, parentType: 'pages' })).toBeNull();
+  });
+
+  it('rejects an absent parentId (neither set nor an explicit clear) and a bad childType', () => {
+    expect(parseRelation({ childId: 2 })).toBeNull();
+    expect(parseRelation({ childId: 2, childType: 'a.b', parentId: null })).toBeNull();
+    expect(parseRelation(null)).toBeNull();
+    expect(parseRelation('x')).toBeNull();
   });
 });

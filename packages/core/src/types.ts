@@ -65,6 +65,17 @@ export interface WpPost {
    * mode (no connector installed).
    */
   dbpWpMeta?: Record<string, unknown>;
+  /**
+   * Parent post ID from the `_dbp_wp_parent` relation meta. Present only when the post
+   * has a parent and the connector registered the key; `undefined` otherwise. The parent
+   * post type's REST base is {@link WpPost.parentType}.
+   */
+  parent?: number;
+  /**
+   * Parent post type's REST route base from `_dbp_wp_parent_type`. Pairs with
+   * {@link WpPost.parent}; `undefined` when the post has no parent.
+   */
+  parentType?: string;
 }
 
 /**

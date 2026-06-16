@@ -132,6 +132,7 @@
         {posts}
         type={selectedType}
         connectorAvailable={connection.connectorAvailable}
+        {postTypes}
         onsaved={refresh}
       />
     {/key}

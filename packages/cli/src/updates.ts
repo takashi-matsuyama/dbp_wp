@@ -1,4 +1,4 @@
-import type { UpdatePostFields } from '@dbp-wp/core';
+import type { RelationTarget, UpdatePostFields } from '@dbp-wp/core';
 
 /** A single validated post update parsed from an API request. */
 export interface BatchUpdate {
@@ -199,6 +199,59 @@ export function parseMetaInput(value: unknown): Record<string, unknown> | null {
     result[key] = entry;
   }
   return result;
+}
+
+/** A validated parent-relation request: set a child's parent, or clear it. */
+export interface RelationRequest {
+  childId: number;
+  childType: string;
+  /** Parent to set, or null to clear the relation. */
+  relation: RelationTarget | null;
+}
+
+/**
+ * Validate a relation payload (`{ childId, childType?, parentId, parentType? }`) from
+ * untrusted input. `parentId: null` clears the relation; a positive integer sets it (and
+ * `parentType` is then required and must be a valid route slug). Returns null on any
+ * malformed shape. Relation semantics beyond shape (e.g. no self-parent) are enforced by
+ * the core client when the write is built.
+ */
+export function parseRelation(body: unknown): RelationRequest | null {
+  if (typeof body !== 'object' || body === null) {
+    return null;
+  }
+  const record = body as Record<string, unknown>;
+  if (
+    typeof record.childId !== 'number' ||
+    !Number.isSafeInteger(record.childId) ||
+    record.childId <= 0
+  ) {
+    return null;
+  }
+  const childType = parsePostTypeSlug(record.childType);
+  if (childType === null) {
+    return null;
+  }
+
+  // Explicit null clears the relation; absence/other types are malformed (not a clear).
+  if (record.parentId === null) {
+    return { childId: record.childId, childType, relation: null };
+  }
+  if (
+    typeof record.parentId !== 'number' ||
+    !Number.isSafeInteger(record.parentId) ||
+    record.parentId <= 0
+  ) {
+    return null;
+  }
+  if (typeof record.parentType !== 'string' || !ROUTE_SLUG.test(record.parentType)) {
+    return null;
+  }
+  return {
+    childId: record.childId,
+    childType,
+    relation: { parentId: record.parentId, parentType: record.parentType },
+  };
 }
 
 /** A validated per-post meta-deletion request. */

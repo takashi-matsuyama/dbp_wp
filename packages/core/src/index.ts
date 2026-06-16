@@ -19,3 +19,14 @@ export {
   buildImportPlan,
 } from './importer';
 export { type PrintRecord, TemplateParseError, renderTemplate, buildPrintRecord } from './print';
+export {
+  type RelationTarget,
+  RelationError,
+  PARENT_META_KEY,
+  PARENT_TYPE_META_KEY,
+  assertValidRelation,
+  buildSetRelationMeta,
+  buildClearRelationMeta,
+  getRelation,
+  deriveChildren,
+} from './relation';
