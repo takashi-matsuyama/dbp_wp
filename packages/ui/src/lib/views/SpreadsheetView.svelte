@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { WpMedia, WpPost, WpPostType } from '@dbp-wp/core';
-  import { deriveChildren, getRelation } from '@dbp-wp/core';
+  import { deriveChildren, getRelation, renderChildData, renderRecordTemplate } from '@dbp-wp/core';
   import {
     bulkDeleteMeta,
     clearRelation,
@@ -308,6 +308,40 @@
       void ensureCandidates(parentType);
     }
   });
+
+  // --- Child data (template aggregation of a parent's children) ---
+  // A single column-level template, rendered live against each parent's derived children
+  // (deriveChildren + the Print template engine). Nothing is written to WordPress and no
+  // value is cached, so it can never go stale — the legacy `_dbpcloudwp_child_value` sync
+  // bug is avoided by design. The template is UI state (not persisted); persisting column
+  // config belongs to a later data-stract slice.
+  let childTemplate = $state('');
+
+  // Validate the template once (parse errors are row-independent): rendering against an
+  // empty record surfaces an unbalanced {{#each}} without needing a real parent.
+  const childTemplateError = $derived.by<string | null>(() => {
+    const tpl = childTemplate.trim();
+    if (tpl === '') {
+      return null;
+    }
+    try {
+      renderRecordTemplate(tpl, {}, { escape: false });
+      return null;
+    } catch (e) {
+      return e instanceof Error ? e.message : String(e);
+    }
+  });
+
+  const showChildData = $derived(childTemplate.trim() !== '');
+
+  // Rendered child-data text for one parent row. Returns '' while the template is invalid so
+  // the grid keeps rendering (the error is shown once in the toolbar instead).
+  function childData(post: WpPost): string {
+    if (!showChildData || childTemplateError) {
+      return '';
+    }
+    return renderChildData(childTemplate, post, posts);
+  }
 
   // --- Featured image (core REST `featured_media`; no connector needed) ---
   // Assignment is a draft (the post id → new featured media id; 0 = remove) that rides the
@@ -675,6 +709,20 @@
       </datalist>
       <button onclick={addColumn} disabled={saving || newColumn.trim() === ''}>Add column</button>
     </div>
+    <div class="child-bar">
+      <label class="child-template-label">
+        Child data template
+        <textarea
+          class="child-template"
+          bind:value={childTemplate}
+          rows="2"
+          placeholder={'{{#each children}}{{ this.title }}, {{/each}}'}
+          disabled={saving}
+        ></textarea>
+      </label>
+      <span class="hint">per parent row: childCount, children[].title / .status / .meta.&lt;key&gt;</span>
+      {#if childTemplateError}<span class="error">{childTemplateError}</span>{/if}
+    </div>
   {:else}
     <p class="restricted-note">
       Custom field editing and parent/child relations need the DBP WP Connector plugin.
@@ -693,6 +741,9 @@
         {#if connectorAvailable}
           <th>Parent</th>
           <th>Children</th>
+          {#if showChildData}
+            <th>Child data</th>
+          {/if}
         {/if}
         {#each metaColumns as key (key)}
           <th class="meta-col">
@@ -849,6 +900,9 @@
                 <span class="parent-none">—</span>
               {/if}
             </td>
+            {#if showChildData}
+              <td class="child-data-cell">{childData(post)}</td>
+            {/if}
           {/if}
           {#each metaColumns as key (key)}
             <td class:changed-cell={isMetaChanged(post, key)}>
@@ -980,6 +1034,30 @@
   }
   .child-count {
     cursor: help;
+  }
+  .child-bar {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.5rem;
+    margin: 0.5rem 0;
+    flex-wrap: wrap;
+  }
+  .child-template-label {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+    font-size: 0.85rem;
+  }
+  .child-template {
+    width: min(28rem, 100%);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.8rem;
+  }
+  .child-data-cell {
+    white-space: pre-wrap;
+    max-width: 22rem;
+    font-size: 0.85rem;
+    vertical-align: top;
   }
   .drag-col {
     width: 1.6rem;

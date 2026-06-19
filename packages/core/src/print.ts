@@ -67,7 +67,7 @@ interface EachNode {
 
 interface Scope {
   /** The record paths resolve against by default. */
-  record: PrintRecord;
+  record: object;
   /** The current `{{#each}}` item, reachable as `this` / `this.<key>`. */
   current?: unknown;
 }
@@ -173,20 +173,21 @@ function escapeHtml(value: string): string {
     .replace(/'/g, '&#39;');
 }
 
-function renderNodes(nodes: TemplateNode[], scope: Scope): string {
+function renderNodes(nodes: TemplateNode[], scope: Scope, escape: boolean): string {
   let out = '';
   for (const node of nodes) {
     if (node.kind === 'text') {
       out += node.value;
     } else if (node.kind === 'var') {
-      const value = resolve(node.path, scope);
-      out += node.raw ? stringifyScalar(value) : escapeHtml(stringifyScalar(value));
+      const value = stringifyScalar(resolve(node.path, scope));
+      // `{{{ }}}` is always raw; `{{ }}` is HTML-escaped only in escaping (HTML) mode.
+      out += node.raw || !escape ? value : escapeHtml(value);
     } else {
       // each: iterate only when the path resolves to an array; otherwise render nothing.
       const list = resolve(node.path, scope);
       if (Array.isArray(list)) {
         for (const item of list) {
-          out += renderNodes(node.body, { record: scope.record, current: item });
+          out += renderNodes(node.body, { record: scope.record, current: item }, escape);
         }
       }
     }
@@ -200,7 +201,22 @@ function renderNodes(nodes: TemplateNode[], scope: Scope): string {
  * `{{#each}}` / `{{/each}}`.
  */
 export function renderTemplate(template: string, record: PrintRecord): string {
-  return renderNodes(parseTemplate(template), { record });
+  return renderNodes(parseTemplate(template), { record }, true);
+}
+
+/**
+ * Render a template against an arbitrary record object, reusing the same `{{ }}` /
+ * `{{#each}}` engine as {@link renderTemplate}. By default `{{ }}` values are HTML-escaped
+ * (HTML output). Pass `escape: false` for a plain-text context (e.g. a spreadsheet cell
+ * rendered as text, where the host already escapes for the DOM and re-escaping here would
+ * surface literal entities). Throws {@link TemplateParseError} on unbalanced `{{#each}}`.
+ */
+export function renderRecordTemplate(
+  template: string,
+  record: object,
+  options: { escape?: boolean } = {},
+): string {
+  return renderNodes(parseTemplate(template), { record }, options.escape ?? true);
 }
 
 /** Flatten one meta value to a string. Arrays join their non-empty scalar parts. */

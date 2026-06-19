@@ -1,3 +1,4 @@
+import { renderRecordTemplate } from './print';
 import type { WpPost } from './types';
 
 /**
@@ -111,4 +112,103 @@ export function deriveChildren(posts: WpPost[], parentId: number): WpPost[] {
     return [];
   }
   return posts.filter((post) => post.parent === parentId);
+}
+
+// --- Child data (template aggregation of a parent's children) ---
+//
+// The legacy app stored a per-parent template (`_dbpcloudwp_child_formula`) and cached its
+// rendered output (`_dbpcloudwp_child_value`) as parent meta — a denormalized value that
+// went stale whenever a child changed. The new model persists nothing: a column-level
+// template is rendered live against each parent's derived children, reusing the Print
+// template engine ({@link renderRecordTemplate}). So `{{ }}`/`{{#each}}` work as in Print.
+
+/** A child post flattened for templating inside a parent's child-data column. */
+export interface ChildRecord {
+  id: number;
+  title: string;
+  status: string;
+  menuOrder: number;
+  /** Flattened meta (core overlaid by connector), values stringified; `this.meta.<key>`. */
+  meta: Record<string, string>;
+}
+
+/**
+ * A parent exposed to a child-data template: its own fields plus the derived `children`
+ * (and `childCount`), so a template can aggregate them, e.g.
+ * `{{#each children}}{{ this.title }}{{/each}}`.
+ */
+export interface ParentAggregateRecord {
+  id: number;
+  title: string;
+  status: string;
+  menuOrder: number;
+  meta: Record<string, string>;
+  childCount: number;
+  children: ChildRecord[];
+}
+
+/** Stringify one meta value; an array joins its non-empty scalar parts with `, `. */
+function flattenMetaValue(value: unknown): string {
+  if (Array.isArray(value)) {
+    return value
+      .map((v) => (v === null || v === undefined ? '' : String(v)))
+      .filter((s) => s !== '')
+      .join(', ');
+  }
+  return value === null || value === undefined ? '' : String(value);
+}
+
+/**
+ * Flatten a post's meta (core `meta` overlaid by connector `dbpWpMeta`) to flat string
+ * values. Uses a null-proto accumulator so untrusted meta keys (`__proto__`, `constructor`)
+ * become plain own entries with no prototype pollution and no inherited-key collisions.
+ */
+function flattenPostMeta(post: WpPost): Record<string, string> {
+  const out: Record<string, string> = Object.create(null) as Record<string, string>;
+  const add = (src: Record<string, unknown> | undefined): void => {
+    if (!src) return;
+    for (const [key, value] of Object.entries(src)) {
+      out[key] = flattenMetaValue(value);
+    }
+  };
+  add(post.meta);
+  add(post.dbpWpMeta); // connector meta overlays core meta for the same key
+  return out;
+}
+
+/** Build a {@link ChildRecord} from a loaded post (meta flattened for templating). */
+export function buildChildRecord(post: WpPost): ChildRecord {
+  return {
+    id: post.id,
+    title: post.title,
+    status: post.status,
+    menuOrder: post.menuOrder,
+    meta: flattenPostMeta(post),
+  };
+}
+
+/** Build the {@link ParentAggregateRecord} a child-data template renders against. */
+export function buildParentAggregate(parent: WpPost, children: WpPost[]): ParentAggregateRecord {
+  return {
+    id: parent.id,
+    title: parent.title,
+    status: parent.status,
+    menuOrder: parent.menuOrder,
+    meta: flattenPostMeta(parent),
+    childCount: children.length,
+    children: children.map(buildChildRecord),
+  };
+}
+
+/**
+ * Render a "child data" template for one parent: derive its children from the already-loaded
+ * posts ({@link deriveChildren}), build the aggregate record, and render the template with
+ * the shared Print engine. Same-type, in-grid children only (cross-type/off-grid children
+ * need a server query — deferred). Rendered in plain-text (non-escaping) mode, since the
+ * result is shown as a spreadsheet cell's text. Throws {@link TemplateParseError} on an
+ * unbalanced `{{#each}}`.
+ */
+export function renderChildData(template: string, parent: WpPost, posts: WpPost[]): string {
+  const children = deriveChildren(posts, parent.id);
+  return renderRecordTemplate(template, buildParentAggregate(parent, children), { escape: false });
 }

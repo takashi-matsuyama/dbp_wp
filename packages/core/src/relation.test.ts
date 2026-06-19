@@ -4,11 +4,15 @@ import {
   PARENT_TYPE_META_KEY,
   RelationError,
   assertValidRelation,
+  buildChildRecord,
   buildClearRelationMeta,
+  buildParentAggregate,
   buildSetRelationMeta,
   deriveChildren,
   getRelation,
+  renderChildData,
 } from './relation';
+import { TemplateParseError } from './print';
 import type { WpPost } from './types';
 
 function post(overrides: Partial<WpPost> & { id: number }): WpPost {
@@ -111,5 +115,98 @@ describe('deriveChildren', () => {
     const posts = [post({ id: 2, parent: 1, parentType: 'pages' })];
     expect(deriveChildren(posts, 0)).toEqual([]);
     expect(deriveChildren(posts, -1)).toEqual([]);
+  });
+});
+
+describe('buildChildRecord', () => {
+  it('maps standard fields and flattens meta (arrays joined)', () => {
+    const child = post({
+      id: 5,
+      title: 'Child',
+      status: 'draft',
+      menuOrder: 2,
+      meta: { color: 'red', sizes: ['S', 'M'] },
+    });
+    expect(buildChildRecord(child)).toEqual({
+      id: 5,
+      title: 'Child',
+      status: 'draft',
+      menuOrder: 2,
+      meta: { color: 'red', sizes: 'S, M' },
+    });
+  });
+
+  it('overlays connector meta (dbpWpMeta) on core meta', () => {
+    const child = post({ id: 5, meta: { color: 'red' }, dbpWpMeta: { color: 'blue', price: '9' } });
+    expect(buildChildRecord(child).meta).toEqual({ color: 'blue', price: '9' });
+  });
+
+  it('keeps prototype-like meta keys as own entries without pollution', () => {
+    const meta = JSON.parse('{"__proto__":"p","constructor":"c","ok":"v"}') as Record<
+      string,
+      unknown
+    >;
+    const rec = buildChildRecord(post({ id: 5, meta }));
+    expect(Object.prototype.hasOwnProperty.call(rec.meta, '__proto__')).toBe(true);
+    expect(rec.meta['__proto__']).toBe('p');
+    expect(rec.meta.ok).toBe('v');
+    expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+  });
+});
+
+describe('buildParentAggregate', () => {
+  it('carries the parent fields plus children and childCount', () => {
+    const parent = post({ id: 1, title: 'Parent', meta: { region: 'asia' } });
+    const children = [post({ id: 2, title: 'A' }), post({ id: 3, title: 'B' })];
+    const agg = buildParentAggregate(parent, children);
+    expect(agg.id).toBe(1);
+    expect(agg.title).toBe('Parent');
+    expect(agg.meta).toEqual({ region: 'asia' });
+    expect(agg.childCount).toBe(2);
+    expect(agg.children.map((c) => c.title)).toEqual(['A', 'B']);
+  });
+});
+
+describe('renderChildData', () => {
+  const posts = [
+    post({ id: 1, title: 'Parent' }),
+    post({ id: 2, parent: 1, parentType: 'post', title: 'India', meta: { pop: '1400' } }),
+    post({ id: 3, parent: 1, parentType: 'post', title: 'China', meta: { pop: '1410' } }),
+    post({ id: 4, parent: 9, parentType: 'post', title: 'Other' }),
+  ];
+
+  it('renders each same-type, in-grid child through the template', () => {
+    const tpl = '{{#each children}}{{ this.title }} ({{ this.meta.pop }}); {{/each}}';
+    expect(renderChildData(tpl, posts[0]!, posts)).toBe('India (1400); China (1410); ');
+  });
+
+  it('exposes childCount and the parent fields', () => {
+    expect(renderChildData('{{ title }} has {{ childCount }}', posts[0]!, posts)).toBe(
+      'Parent has 2',
+    );
+  });
+
+  it('renders in plain-text (non-escaping) mode', () => {
+    const ampPosts = [
+      post({ id: 1, title: 'P' }),
+      post({ id: 2, parent: 1, parentType: 'post', title: 'A & B' }),
+    ];
+    expect(renderChildData('{{#each children}}{{ this.title }}{{/each}}', ampPosts[0]!, ampPosts)).toBe(
+      'A & B',
+    );
+  });
+
+  it('renders nothing for a parent with no children', () => {
+    expect(renderChildData('{{#each children}}{{ this.title }}{{/each}}', posts[3]!, posts)).toBe('');
+  });
+
+  it('returns empty string for an empty template', () => {
+    expect(renderChildData('', posts[0]!, posts)).toBe('');
+  });
+
+  it('throws TemplateParseError on an unbalanced each', () => {
+    expect(() => renderChildData('{{#each children}}x', posts[0]!, posts)).toThrow(
+      TemplateParseError,
+    );
   });
 });

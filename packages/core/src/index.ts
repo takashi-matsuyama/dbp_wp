@@ -27,9 +27,17 @@ export {
   normalizeStatus,
   buildImportPlan,
 } from './importer';
-export { type PrintRecord, TemplateParseError, renderTemplate, buildPrintRecord } from './print';
+export {
+  type PrintRecord,
+  TemplateParseError,
+  renderTemplate,
+  renderRecordTemplate,
+  buildPrintRecord,
+} from './print';
 export {
   type RelationTarget,
+  type ChildRecord,
+  type ParentAggregateRecord,
   RelationError,
   PARENT_META_KEY,
   PARENT_TYPE_META_KEY,
@@ -38,4 +46,7 @@ export {
   buildClearRelationMeta,
   getRelation,
   deriveChildren,
+  buildChildRecord,
+  buildParentAggregate,
+  renderChildData,
 } from './relation';

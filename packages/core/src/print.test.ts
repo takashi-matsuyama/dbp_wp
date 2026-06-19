@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { buildPrintRecord, renderTemplate, TemplateParseError, type PrintRecord } from './print';
+import {
+  buildPrintRecord,
+  renderRecordTemplate,
+  renderTemplate,
+  TemplateParseError,
+  type PrintRecord,
+} from './print';
 import type { WpPostResponse } from './types';
 
 function record(overrides: Partial<PrintRecord> = {}): PrintRecord {
@@ -76,6 +82,34 @@ describe('renderTemplate', () => {
   it('throws TemplateParseError on unbalanced each', () => {
     expect(() => renderTemplate('{{#each tax.category}}x', record())).toThrow(TemplateParseError);
     expect(() => renderTemplate('x{{/each}}', record())).toThrow(TemplateParseError);
+  });
+});
+
+describe('renderRecordTemplate', () => {
+  it('renders against an arbitrary record and escapes by default (like renderTemplate)', () => {
+    expect(renderRecordTemplate('{{ name }}', { name: 'A & B' })).toBe('A &amp; B');
+  });
+
+  it('emits {{ }} raw (no HTML escaping) when escape is false', () => {
+    expect(renderRecordTemplate('{{ name }}', { name: 'A & B' }, { escape: false })).toBe('A & B');
+    // {{{ }}} is raw in either mode; the escape flag only changes {{ }}.
+    expect(renderRecordTemplate('{{{ name }}}', { name: '<x>' }, { escape: false })).toBe('<x>');
+  });
+
+  it('iterates a children array with {{#each}} and this.<key>, unescaped', () => {
+    const recordValue = {
+      childCount: 2,
+      children: [
+        { title: 'A & B', meta: { price: '10' } },
+        { title: 'C', meta: { price: '20' } },
+      ],
+    };
+    const tpl = '{{ childCount }}: {{#each children}}{{ this.title }}={{ this.meta.price }};{{/each}}';
+    expect(renderRecordTemplate(tpl, recordValue, { escape: false })).toBe('2: A & B=10;C=20;');
+  });
+
+  it('throws TemplateParseError on an unbalanced each', () => {
+    expect(() => renderRecordTemplate('{{#each children}}x', {})).toThrow(TemplateParseError);
   });
 });
 
