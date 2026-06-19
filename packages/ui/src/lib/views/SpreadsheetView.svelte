@@ -13,20 +13,33 @@
     type PostUpdate,
   } from '../api';
   import { computeMenuOrders } from '../formula';
+  import { loadColumnSettings, saveColumnSettings } from '../settings';
 
   let {
     posts,
     type,
+    siteUrl,
     connectorAvailable,
     postTypes,
     onsaved,
   }: {
     posts: WpPost[];
     type: string;
+    /** Connected site URL (null in the demo / before connecting); namespaces saved settings. */
+    siteUrl: string | null;
     connectorAvailable: boolean;
     postTypes: WpPostType[];
     onsaved: () => void | Promise<void>;
   } = $props();
+
+  // Column settings persisted per (site, type) in localStorage. Loaded synchronously here so
+  // the shown meta columns, their labels, and the child-data template survive reloads. This
+  // component is keyed on (site, type) in App, so a fresh instance always loads the right set
+  // — reading the props once at init (inside this closure) is intentional, not reactive.
+  function loadInitialSettings(): ReturnType<typeof loadColumnSettings> {
+    return loadColumnSettings(siteUrl, type);
+  }
+  const savedSettings = loadInitialSettings();
 
   let formula = $state('');
   let formulaError = $state<string | null>(null);
@@ -39,9 +52,48 @@
   let drafts = $state<Record<number, Draft>>({});
   // Per-post, per-key string drafts for custom field (meta) edits.
   let metaDrafts = $state<Record<number, Record<string, string>>>({});
-  // Meta keys shown as editable columns (full mode only); managed by the user.
-  let metaColumns = $state<string[]>([]);
+  // Meta keys shown as editable columns; restored from saved settings (read from the plain
+  // `savedSettings` const, not the props, so there is no reactive-capture warning). The
+  // columns and their cells only render in full mode (gated on connectorAvailable in markup),
+  // and the persist effect below only writes in full mode, so a restricted session neither
+  // shows nor clobbers them.
+  let metaColumns = $state<string[]>(savedSettings.columns.map((c) => c.key));
+  // Per-column display labels, keyed by meta key (default = the key). Use labelFor() to read,
+  // which guards against inherited Object.prototype keys (e.g. a meta key named "toString").
+  let columnLabels = $state<Record<string, string>>(
+    Object.fromEntries(savedSettings.columns.map((c) => [c.key, c.label])),
+  );
+  let editingLabelKey = $state<string | null>(null);
+  let labelDraft = $state('');
   let newColumn = $state('');
+
+  function labelFor(key: string): string {
+    if (Object.prototype.hasOwnProperty.call(columnLabels, key)) {
+      const label = columnLabels[key];
+      if (typeof label === 'string') {
+        return label;
+      }
+    }
+    return key;
+  }
+
+  function startLabelEdit(key: string): void {
+    editingLabelKey = key;
+    labelDraft = labelFor(key);
+  }
+
+  function commitLabel(key: string): void {
+    if (editingLabelKey !== key) {
+      return;
+    }
+    const next = labelDraft.trim();
+    columnLabels = { ...columnLabels, [key]: next === '' ? key : next };
+    editingLabelKey = null;
+  }
+
+  function cancelLabelEdit(): void {
+    editingLabelKey = null;
+  }
   let saving = $state(false);
   let error = $state<string | null>(null);
   let rowErrors = $state<Record<number, string>>({});
@@ -115,6 +167,9 @@
 
   function removeColumn(key: string): void {
     metaColumns = metaColumns.filter((k) => k !== key);
+    // Drop the column's saved label too (the column no longer exists).
+    const { [key]: _removedLabel, ...restLabels } = columnLabels;
+    columnLabels = restLabels;
     // Drop pending drafts for the hidden column so they no longer count as changes.
     const next: Record<number, Record<string, string>> = {};
     for (const [id, row] of Object.entries(metaDrafts)) {
@@ -313,9 +368,9 @@
   // A single column-level template, rendered live against each parent's derived children
   // (deriveChildren + the Print template engine). Nothing is written to WordPress and no
   // value is cached, so it can never go stale — the legacy `_dbpcloudwp_child_value` sync
-  // bug is avoided by design. The template is UI state (not persisted); persisting column
-  // config belongs to a later data-stract slice.
-  let childTemplate = $state('');
+  // bug is avoided by design. The template is restored from saved settings and persisted
+  // alongside the meta columns by the effect below; its column only renders in full mode.
+  let childTemplate = $state(savedSettings.childTemplate);
 
   // Validate the template once (parse errors are row-independent): rendering against an
   // empty record surfaces an unbalanced {{#each}} without needing a real parent.
@@ -342,6 +397,18 @@
     }
     return renderChildData(childTemplate, post, posts);
   }
+
+  // Persist the column settings (shown meta columns + their labels + the child-data template)
+  // for this (site, type) whenever they change. Connector-only: in restricted mode there are
+  // no meta columns, and skipping the write preserves any settings saved in full mode rather
+  // than clobbering them with empties.
+  $effect(() => {
+    const columns = metaColumns.map((key) => ({ key, label: labelFor(key) }));
+    const template = childTemplate;
+    if (connectorAvailable) {
+      saveColumnSettings(siteUrl, type, { columns, childTemplate: template });
+    }
+  });
 
   // --- Featured image (core REST `featured_media`; no connector needed) ---
   // Assignment is a draft (the post id → new featured media id; 0 = remove) that rides the
@@ -744,10 +811,29 @@
           {#if showChildData}
             <th>Child data</th>
           {/if}
-        {/if}
-        {#each metaColumns as key (key)}
+          {#each metaColumns as key (key)}
           <th class="meta-col">
-            <span class="meta-key">{key}</span>
+            {#if editingLabelKey === key}
+              <input
+                class="label-input"
+                bind:value={labelDraft}
+                disabled={saving}
+                onkeydown={(e) => {
+                  if (e.key === 'Enter') commitLabel(key);
+                  else if (e.key === 'Escape') cancelLabelEdit();
+                }}
+                onblur={() => commitLabel(key)}
+              />
+            {:else}
+              <span class="meta-label">{labelFor(key)}</span>
+              <button
+                class="col-action"
+                title="Rename column label"
+                onclick={() => startLabelEdit(key)}
+                disabled={saving || deleteBusy}>✎</button
+              >
+            {/if}
+            <span class="meta-key" title="meta key">{key}</span>
             {#if deletingKey === key}
               <span class="confirm">
                 Delete “{key}” from {rowsWithKey(key).length} row(s)?
@@ -771,7 +857,8 @@
               >
             {/if}
           </th>
-        {/each}
+          {/each}
+        {/if}
         <th></th>
       </tr>
     </thead>
@@ -903,16 +990,16 @@
             {#if showChildData}
               <td class="child-data-cell">{childData(post)}</td>
             {/if}
+            {#each metaColumns as key (key)}
+              <td class:changed-cell={isMetaChanged(post, key)}>
+                <input
+                  value={metaValueFor(post, key)}
+                  disabled={saving}
+                  oninput={(e) => setMeta(post, key, (e.currentTarget as HTMLInputElement).value)}
+                />
+              </td>
+            {/each}
           {/if}
-          {#each metaColumns as key (key)}
-            <td class:changed-cell={isMetaChanged(post, key)}>
-              <input
-                value={metaValueFor(post, key)}
-                disabled={saving}
-                oninput={(e) => setMeta(post, key, (e.currentTarget as HTMLInputElement).value)}
-              />
-            </td>
-          {/each}
           <td class="row-status">
             {#if rowErrors[post.id]}<span class="error">{rowErrors[post.id]}</span>{/if}
           </td>
@@ -990,6 +1077,20 @@
   }
   .meta-col {
     white-space: nowrap;
+  }
+  .meta-label {
+    font-weight: 600;
+  }
+  .meta-key {
+    display: block;
+    font-weight: normal;
+    font-size: 0.72rem;
+    opacity: 0.6;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  .label-input {
+    width: 8rem;
+    font-size: 0.85rem;
   }
   .col-action {
     margin-left: 0.25rem;

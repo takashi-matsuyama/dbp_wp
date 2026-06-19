@@ -127,10 +127,11 @@
   {:else if tab === 'table'}
     <TableView {posts} />
   {:else if tab === 'spreadsheet'}
-    {#key selectedType}
+    {#key `${connection.siteUrl ?? ''}:${selectedType}`}
       <SpreadsheetView
         {posts}
         type={selectedType}
+        siteUrl={connection.siteUrl}
         connectorAvailable={connection.connectorAvailable}
         {postTypes}
         onsaved={refresh}
