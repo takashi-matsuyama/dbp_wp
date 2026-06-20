@@ -204,3 +204,50 @@ th.sortable {
 .empty {
   color: color-mix(in srgb, currentColor 60%, transparent);
 }
+
+.saved-connection {
+  max-width: 28rem;
+  margin-bottom: 1.5rem;
+  padding: 0.75rem 1rem;
+  border: 1px solid color-mix(in srgb, currentColor 25%, transparent);
+  border-radius: 6px;
+}
+
+.saved-connection p {
+  margin: 0 0 0.5rem;
+  font-size: 0.9rem;
+}
+
+.saved-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.saved-actions button {
+  font: inherit;
+  padding: 0.45rem 1rem;
+  border: 1px solid color-mix(in srgb, currentColor 30%, transparent);
+  border-radius: 6px;
+  background: color-mix(in srgb, currentColor 10%, transparent);
+  cursor: pointer;
+}
+
+.saved-actions button.link {
+  border: none;
+  background: none;
+  padding: 0.45rem 0.25rem;
+  color: color-mix(in srgb, currentColor 70%, transparent);
+  text-decoration: underline;
+}
+
+.saved-actions button:disabled {
+  cursor: progress;
+  opacity: 0.6;
+}
+
+form.connect label.remember {
+  flex-direction: row;
+  align-items: center;
+  gap: 0.5rem;
+}

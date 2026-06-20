@@ -3,7 +3,8 @@ import { stat } from 'node:fs/promises';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { extname, join, relative, resolve } from 'node:path';
 import { RelationError, WpClient, WpRequestError, type WpCredentials } from '@dbp-wp/core';
-import { parseCredentialsInput } from './config';
+import { parseCredentialsInput, parseRememberFlag, parseUseSaved } from './config';
+import type { CredentialsStore } from './credentials-store';
 import { isAllowedHost, isCrossSiteRequest, isJsonContentType } from './host';
 import {
   parseBatchUpdates,
@@ -45,6 +46,8 @@ export interface ServerOptions {
   state: ConnectionState;
   /** Absolute path to the built UI `dist` directory, or null when not built. */
   uiDir: string | null;
+  /** Opt-in credential persistence (OS secure storage). A no-op on unsupported platforms. */
+  store: CredentialsStore;
 }
 
 function sendJson(res: ServerResponse, status: number, body: unknown): void {
@@ -603,14 +606,15 @@ async function handleRelation(
 async function handleConnection(
   req: IncomingMessage,
   res: ServerResponse,
+  url: URL,
   options: ServerOptions,
 ): Promise<void> {
   if (req.method === 'GET') {
     const c = options.state.credentials;
     // Lazily detect the connector for connections that were never probed (e.g. seeded
-    // from env vars), caching the result so we only hit the REST index once. Concurrent
-    // first requests may probe more than once (benign; detection is deterministic), and a
-    // transient probe failure caches restricted mode until the next reconnect.
+    // from env vars or restored from secure storage), caching the result so we only hit the
+    // REST index once. Concurrent first requests may probe more than once (benign; detection
+    // is deterministic), and a transient probe failure caches restricted mode until reconnect.
     if (c && options.state.connectorAvailable === null) {
       try {
         options.state.connectorAvailable = await new WpClient(c).detectConnector();
@@ -618,10 +622,14 @@ async function handleConnection(
         options.state.connectorAvailable = false;
       }
     }
+    const saved = await options.store.peek();
     sendJson(res, 200, {
       connected: c !== null,
       siteUrl: c?.siteUrl ?? null,
       connectorAvailable: options.state.connectorAvailable ?? false,
+      canPersist: options.store.isAvailable(),
+      persisted: saved !== null,
+      savedSiteUrl: saved?.siteUrl ?? null,
     });
     return;
   }
@@ -629,7 +637,20 @@ async function handleConnection(
   if (req.method === 'DELETE') {
     options.state.credentials = null;
     options.state.connectorAvailable = null;
-    sendJson(res, 200, { connected: false, siteUrl: null, connectorAvailable: false });
+    // `?forget=1` also erases the saved credentials; a plain disconnect keeps them so the
+    // next launch can restore the connection.
+    if (url.searchParams.get('forget') === '1') {
+      await options.store.clear();
+    }
+    const saved = await options.store.peek();
+    sendJson(res, 200, {
+      connected: false,
+      siteUrl: null,
+      connectorAvailable: false,
+      canPersist: options.store.isAvailable(),
+      persisted: saved !== null,
+      savedSiteUrl: saved?.siteUrl ?? null,
+    });
     return;
   }
 
@@ -645,12 +666,21 @@ async function handleConnection(
       sendJson(res, 400, { error: e instanceof Error ? e.message : 'Invalid request body' });
       return;
     }
-    const credentials = parseCredentialsInput(body);
+    let credentials = parseCredentialsInput(body);
+    // "Use saved connection": the browser sends no password; load it from secure storage.
+    // Only honored when the client explicitly opts in (useSaved) and persistence is available.
+    let fromSaved = false;
     if (!credentials) {
-      sendJson(res, 400, {
-        error: 'siteUrl, username, and applicationPassword are required.',
-      });
-      return;
+      if (parseUseSaved(body) && options.store.isAvailable()) {
+        credentials = await options.store.load();
+        fromSaved = credentials !== null;
+      }
+      if (!credentials) {
+        sendJson(res, 400, {
+          error: 'siteUrl, username, and applicationPassword are required.',
+        });
+        return;
+      }
     }
     let client: WpClient;
     try {
@@ -679,10 +709,25 @@ async function handleConnection(
     } catch {
       options.state.connectorAvailable = false;
     }
+    // Optionally persist to OS secure storage. Saving is best-effort: a save failure does not
+    // fail the (already successful) connection — the UI learns the outcome from `persisted`.
+    // A connection made *from* saved credentials is already persisted; don't re-save.
+    let persisted = fromSaved;
+    if (!fromSaved && parseRememberFlag(body) && options.store.isAvailable()) {
+      try {
+        await options.store.save(credentials);
+        persisted = true;
+      } catch {
+        persisted = false;
+      }
+    }
     sendJson(res, 200, {
       connected: true,
       siteUrl: credentials.siteUrl,
       connectorAvailable: options.state.connectorAvailable,
+      canPersist: options.store.isAvailable(),
+      persisted,
+      savedSiteUrl: persisted ? credentials.siteUrl : null,
     });
     return;
   }
@@ -697,7 +742,7 @@ async function handleApiRoutes(
   options: ServerOptions,
 ): Promise<void> {
   if (url.pathname === '/api/connection') {
-    await handleConnection(req, res, options);
+    await handleConnection(req, res, url, options);
     return;
   }
   if (url.pathname === '/api/types') {

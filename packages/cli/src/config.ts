@@ -49,3 +49,26 @@ export function readPort(env: NodeJS.ProcessEnv = process.env): number {
   }
   return port;
 }
+
+/**
+ * Read the opt-in "remember this connection" flag from an API request body. Defaults to false
+ * so persistence only happens when the UI explicitly asks for it.
+ */
+export function parseRememberFlag(body: unknown): boolean {
+  if (typeof body !== 'object' || body === null) {
+    return false;
+  }
+  return (body as Record<string, unknown>).remember === true;
+}
+
+/**
+ * Read the "use the saved connection" flag from an API request body. When true (and no
+ * credentials are supplied), the CLI loads the saved credentials from OS secure storage so the
+ * browser never has to handle the password again.
+ */
+export function parseUseSaved(body: unknown): boolean {
+  if (typeof body !== 'object' || body === null) {
+    return false;
+  }
+  return (body as Record<string, unknown>).useSaved === true;
+}

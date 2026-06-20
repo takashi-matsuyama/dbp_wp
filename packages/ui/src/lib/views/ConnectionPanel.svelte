@@ -1,11 +1,22 @@
 <script lang="ts">
-  import { connect } from '../api';
+  import { connect, connectSaved, forget } from '../api';
 
-  let { onconnected }: { onconnected: () => void } = $props();
+  let {
+    onconnected,
+    canPersist = false,
+    persisted = false,
+    savedSiteUrl = null,
+  }: {
+    onconnected: () => void;
+    canPersist?: boolean;
+    persisted?: boolean;
+    savedSiteUrl?: string | null;
+  } = $props();
 
   let siteUrl = $state('');
   let username = $state('');
   let applicationPassword = $state('');
+  let remember = $state(false);
   let busy = $state(false);
   let error = $state<string | null>(null);
 
@@ -13,7 +24,7 @@
     event.preventDefault();
     busy = true;
     error = null;
-    const payload = { siteUrl, username, applicationPassword };
+    const payload = { siteUrl, username, applicationPassword, remember };
     try {
       await connect(payload);
       onconnected();
@@ -25,7 +36,45 @@
       busy = false;
     }
   }
+
+  async function useSaved(): Promise<void> {
+    busy = true;
+    error = null;
+    try {
+      await connectSaved();
+      onconnected();
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
+    } finally {
+      busy = false;
+    }
+  }
+
+  async function forgetSaved(): Promise<void> {
+    busy = true;
+    error = null;
+    try {
+      await forget();
+      onconnected(); // refresh so the saved-connection prompt disappears
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
+    } finally {
+      busy = false;
+    }
+  }
 </script>
+
+{#if persisted && savedSiteUrl}
+  <section class="saved-connection">
+    <p>Saved connection: <strong>{savedSiteUrl}</strong></p>
+    <div class="saved-actions">
+      <button type="button" onclick={useSaved} disabled={busy}>
+        {busy ? 'Connecting…' : 'Use saved connection'}
+      </button>
+      <button type="button" class="link" onclick={forgetSaved} disabled={busy}>Forget</button>
+    </div>
+  </section>
+{/if}
 
 <form class="connect" onsubmit={submit}>
   <h2>Connect to WordPress</h2>
@@ -49,6 +98,13 @@
     Application Password
     <input type="password" bind:value={applicationPassword} autocomplete="off" required />
   </label>
+
+  {#if canPersist}
+    <label class="remember">
+      <input type="checkbox" bind:checked={remember} />
+      Remember this connection (stored securely in your OS Keychain)
+    </label>
+  {/if}
 
   <button type="submit" disabled={busy}>{busy ? 'Connecting…' : 'Connect'}</button>
 

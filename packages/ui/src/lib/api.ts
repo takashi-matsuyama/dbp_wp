@@ -13,7 +13,9 @@ const impl: ApiImpl = import.meta.env.VITE_DBP_DEMO === 'true' ? localImpl : cli
 
 export const getConnection = impl.getConnection;
 export const connect = impl.connect;
+export const connectSaved = impl.connectSaved;
 export const disconnect = impl.disconnect;
+export const forget = impl.forget;
 export const fetchTypes = impl.fetchTypes;
 export const fetchPosts = impl.fetchPosts;
 export const savePosts = impl.savePosts;

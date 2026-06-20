@@ -180,6 +180,10 @@ const CONNECTION: ConnectionStatus = {
   connected: true,
   siteUrl: 'demo://world-bank-open-data',
   connectorAvailable: true,
+  // The demo never handles real credentials, so secure-storage persistence is irrelevant.
+  canPersist: false,
+  persisted: false,
+  savedSiteUrl: null,
 };
 
 export function getConnection(): Promise<ConnectionStatus> {
@@ -192,7 +196,17 @@ export function connect(): Promise<ConnectionStatus> {
   return Promise.resolve({ ...CONNECTION });
 }
 
+/** The demo has no secure storage; "use saved" just returns the always-connected demo state. */
+export function connectSaved(): Promise<ConnectionStatus> {
+  return Promise.resolve({ ...CONNECTION });
+}
+
 export function disconnect(): Promise<void> {
+  return Promise.resolve();
+}
+
+/** Nothing is ever persisted in the demo, so forgetting is a no-op. */
+export function forget(): Promise<void> {
   return Promise.resolve();
 }
 

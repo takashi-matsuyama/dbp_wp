@@ -89,12 +89,27 @@ export async function getConnection(): Promise<ConnectionStatus> {
     connected: data.connected === true,
     siteUrl: typeof data.siteUrl === 'string' ? data.siteUrl : null,
     connectorAvailable: data.connectorAvailable === true,
+    canPersist: data.canPersist === true,
+    persisted: data.persisted === true,
+    savedSiteUrl: typeof data.savedSiteUrl === 'string' ? data.savedSiteUrl : null,
+  };
+}
+
+/** Shape a connection response, falling back to a known siteUrl and safe defaults. */
+function toStatus(data: Partial<ConnectionStatus>, fallbackSiteUrl: string | null): ConnectionStatus {
+  return {
+    connected: data.connected ?? true,
+    siteUrl: data.siteUrl ?? fallbackSiteUrl,
+    connectorAvailable: data.connectorAvailable ?? false,
+    canPersist: data.canPersist ?? false,
+    persisted: data.persisted ?? false,
+    savedSiteUrl: data.savedSiteUrl ?? null,
   };
 }
 
 /**
- * Send credentials to the CLI, which holds them in memory and probes the connection.
- * The browser does not persist the credentials.
+ * Send credentials to the CLI, which holds them in memory and probes the connection. With
+ * `remember: true` the CLI also persists them to OS secure storage. The browser keeps nothing.
  */
 export async function connect(input: ConnectInput): Promise<ConnectionStatus> {
   const res = await fetch('/api/connection', {
@@ -108,18 +123,38 @@ export async function connect(input: ConnectInput): Promise<ConnectionStatus> {
   if (!res.ok) {
     throw new Error(data.error ?? `Connection failed: ${res.status}`);
   }
-  return {
-    connected: data.connected ?? true,
-    siteUrl: data.siteUrl ?? input.siteUrl,
-    connectorAvailable: data.connectorAvailable ?? false,
-  };
+  return toStatus(data, input.siteUrl);
 }
 
-/** Clear the CLI's in-memory credentials. */
+/** Connect using credentials previously saved in OS secure storage (no password in the browser). */
+export async function connectSaved(): Promise<ConnectionStatus> {
+  const res = await fetch('/api/connection', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ useSaved: true }),
+  });
+  const data = (await res.json().catch(() => ({}))) as Partial<ConnectionStatus> & {
+    error?: string;
+  };
+  if (!res.ok) {
+    throw new Error(data.error ?? `Connection failed: ${res.status}`);
+  }
+  return toStatus(data, null);
+}
+
+/** Clear the CLI's in-memory credentials (leaves any saved connection intact). */
 export async function disconnect(): Promise<void> {
   const res = await fetch('/api/connection', { method: 'DELETE' });
   if (!res.ok) {
     throw new Error(`Disconnect failed: ${res.status}`);
+  }
+}
+
+/** Erase the saved connection from OS secure storage (also disconnects). */
+export async function forget(): Promise<void> {
+  const res = await fetch('/api/connection?forget=1', { method: 'DELETE' });
+  if (!res.ok) {
+    throw new Error(`Forget failed: ${res.status}`);
   }
 }
 

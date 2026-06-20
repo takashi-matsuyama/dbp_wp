@@ -26,12 +26,20 @@ export interface ConnectionStatus {
   siteUrl: string | null;
   /** Whether the companion plugin is active on the connected site (full mode). */
   connectorAvailable: boolean;
+  /** Whether this platform can persist credentials to OS secure storage (macOS only). */
+  canPersist: boolean;
+  /** Whether a saved connection currently exists in secure storage. */
+  persisted: boolean;
+  /** The siteUrl of the saved connection (for the "use saved" prompt), or null. */
+  savedSiteUrl: string | null;
 }
 
 export interface ConnectInput {
   siteUrl: string;
   username: string;
   applicationPassword: string;
+  /** Opt-in: persist these credentials to OS secure storage on a successful connection. */
+  remember?: boolean;
 }
 
 export interface PostUpdate {
@@ -87,7 +95,11 @@ export interface MediaListResult {
 export interface ApiImpl {
   getConnection(): Promise<ConnectionStatus>;
   connect(input: ConnectInput): Promise<ConnectionStatus>;
+  /** Connect using credentials saved in OS secure storage (no password in the browser). */
+  connectSaved(): Promise<ConnectionStatus>;
   disconnect(): Promise<void>;
+  /** Erase any saved credentials from OS secure storage. */
+  forget(): Promise<void>;
   fetchTypes(): Promise<WpPostType[]>;
   fetchPosts(query?: ListPostsQuery): Promise<PostsResponse>;
   savePosts(updates: PostUpdate[], type?: string): Promise<UpdateResult[]>;

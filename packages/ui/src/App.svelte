@@ -17,7 +17,14 @@
   type Tab = 'table' | 'spreadsheet' | 'import' | 'print';
 
   let tab = $state<Tab>('table');
-  let connection = $state<ConnectionStatus>({ connected: false, siteUrl: null, connectorAvailable: false });
+  let connection = $state<ConnectionStatus>({
+    connected: false,
+    siteUrl: null,
+    connectorAvailable: false,
+    canPersist: false,
+    persisted: false,
+    savedSiteUrl: null,
+  });
   let posts = $state<WpPost[]>([]);
   let postTypes = $state<WpPostType[]>([]);
   let selectedType = $state('posts');
@@ -39,8 +46,9 @@
         }
         const res = await fetchPosts({ type: selectedType });
         if (res.unconfigured) {
-          // Credentials disappeared between the checks; reflect the real state.
-          connection = { connected: false, siteUrl: null, connectorAvailable: false };
+          // Credentials disappeared between the checks; reflect the real state, but keep the
+          // persistence fields from the status we just fetched (a saved connection may remain).
+          connection = { ...connection, connected: false, siteUrl: null, connectorAvailable: false };
           posts = [];
           postTypes = [];
           selectedType = 'posts';
@@ -123,7 +131,12 @@
     <p class="error">{error}</p>
     <button onclick={refresh}>Retry</button>
   {:else if !connection.connected}
-    <ConnectionPanel onconnected={refresh} />
+    <ConnectionPanel
+      onconnected={refresh}
+      canPersist={connection.canPersist}
+      persisted={connection.persisted}
+      savedSiteUrl={connection.savedSiteUrl}
+    />
   {:else if tab === 'table'}
     <TableView {posts} />
   {:else if tab === 'spreadsheet'}

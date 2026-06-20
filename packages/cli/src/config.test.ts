@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_PORT, parseCredentialsInput, readCredentials, readPort } from './config';
+import {
+  DEFAULT_PORT,
+  parseCredentialsInput,
+  parseRememberFlag,
+  parseUseSaved,
+  readCredentials,
+  readPort,
+} from './config';
 
 describe('readCredentials', () => {
   it('returns null when any field is missing', () => {
@@ -54,5 +61,34 @@ describe('parseCredentialsInput', () => {
         applicationPassword: ' abcd efgh ',
       }),
     ).toEqual({ siteUrl: 'https://x.com', username: 'editor', applicationPassword: 'abcd efgh' });
+  });
+});
+
+describe('parseRememberFlag', () => {
+  it('is true only for an explicit boolean true', () => {
+    expect(parseRememberFlag({ remember: true })).toBe(true);
+  });
+
+  it('defaults to false for missing, falsy, or non-boolean values', () => {
+    expect(parseRememberFlag({})).toBe(false);
+    expect(parseRememberFlag({ remember: false })).toBe(false);
+    expect(parseRememberFlag({ remember: 'true' })).toBe(false);
+    expect(parseRememberFlag({ remember: 1 })).toBe(false);
+    expect(parseRememberFlag(null)).toBe(false);
+    expect(parseRememberFlag('nope')).toBe(false);
+  });
+});
+
+describe('parseUseSaved', () => {
+  it('is true only for an explicit boolean true', () => {
+    expect(parseUseSaved({ useSaved: true })).toBe(true);
+  });
+
+  it('defaults to false for missing, falsy, or non-boolean values', () => {
+    expect(parseUseSaved({})).toBe(false);
+    expect(parseUseSaved({ useSaved: false })).toBe(false);
+    expect(parseUseSaved({ useSaved: 'true' })).toBe(false);
+    expect(parseUseSaved(null)).toBe(false);
+    expect(parseUseSaved('nope')).toBe(false);
   });
 });
