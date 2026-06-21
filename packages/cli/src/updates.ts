@@ -75,7 +75,44 @@ function parseEditableFields(record: Record<string, unknown>): UpdatePostFields 
     }
     fields.featuredMedia = record.featuredMedia;
   }
+  if (record.terms !== undefined) {
+    const terms = parseTermsInput(record.terms);
+    if (terms === null) {
+      return null;
+    }
+    // Only carry terms when at least one taxonomy is present; `{}` is nothing to do (a taxonomy
+    // with an empty array — clearing its terms — still counts as present).
+    if (Object.keys(terms).length > 0) {
+      fields.terms = terms;
+    }
+  }
   return fields;
+}
+
+/**
+ * Validate a taxonomy-terms map (`{ <restBase>: number[] }`) from untrusted input. Each key
+ * must be a valid REST route slug and each value an array of positive integer term IDs (an empty
+ * array clears that taxonomy). Returns null on any malformed shape. A core REST field — no plugin.
+ */
+function parseTermsInput(value: unknown): Record<string, number[]> | null {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return null;
+  }
+  const result: Record<string, number[]> = Object.create(null) as Record<string, number[]>;
+  for (const [restBase, ids] of Object.entries(value as Record<string, unknown>)) {
+    if (!ROUTE_SLUG.test(restBase) || !Array.isArray(ids)) {
+      return null;
+    }
+    const clean: number[] = [];
+    for (const id of ids) {
+      if (typeof id !== 'number' || !Number.isSafeInteger(id) || id <= 0) {
+        return null;
+      }
+      clean.push(id);
+    }
+    result[restBase] = clean;
+  }
+  return result;
 }
 
 /**

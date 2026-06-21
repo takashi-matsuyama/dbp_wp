@@ -22,6 +22,7 @@ function post(overrides: Partial<WpPost> & { id: number }): WpPost {
     title: `Post ${overrides.id}`,
     menuOrder: 0,
     meta: {},
+    terms: {},
     ...overrides,
   };
 }

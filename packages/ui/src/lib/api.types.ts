@@ -1,4 +1,12 @@
-import type { PrintRecord, WpMedia, WpPost, WpPostEdit, WpPostType } from '@dbp-wp/core';
+import type {
+  PrintRecord,
+  WpMedia,
+  WpPost,
+  WpPostEdit,
+  WpPostType,
+  WpTaxonomy,
+  WpTerm,
+} from '@dbp-wp/core';
 
 // Shared data types and the data-layer interface. Two implementations satisfy `ApiImpl`:
 // `api.cli.ts` (the real CLI-backed `/api` client) and `api.local.ts` (the browser demo's
@@ -49,6 +57,11 @@ export interface PostUpdate {
   status?: string;
   /** Featured image (attachment) id; `0` removes it. A core REST field (no connector). */
   featuredMedia?: number;
+  /**
+   * Taxonomy term IDs keyed by REST base (e.g. `{ categories: [1, 2] }`); an empty array clears
+   * that taxonomy. A core REST field (no connector).
+   */
+  terms?: Record<string, number[]>;
   /** Arbitrary meta to write via the companion plugin (full mode only). */
   meta?: Record<string, unknown>;
 }
@@ -100,6 +113,12 @@ export interface MediaListResult {
   totalPages: number;
 }
 
+/** A page of taxonomy-term results, with the total page count for the picker's pager. */
+export interface TermListResult {
+  items: WpTerm[];
+  totalPages: number;
+}
+
 /**
  * The data layer the UI depends on. Both the CLI client and the local demo store implement
  * this exact surface so the views are identical in either build.
@@ -137,4 +156,10 @@ export interface ApiImpl {
   listMedia(query?: { page?: number; search?: string }): Promise<MediaListResult>;
   /** Resolve specific media ids to their URLs (to fill featured-image thumbnails). */
   resolveMedia(ids: number[]): Promise<WpMedia[]>;
+  /** List the taxonomies applicable to a post type (categories, tags, custom). Core REST. */
+  fetchTaxonomies(type: string): Promise<WpTaxonomy[]>;
+  /** List a taxonomy's terms for the picker, paginated/searchable (core REST). */
+  fetchTerms(taxonomy: string, query?: { page?: number; search?: string }): Promise<TermListResult>;
+  /** Resolve specific term ids to their names (to label the taxonomy columns). Core REST. */
+  resolveTerms(taxonomy: string, ids: number[]): Promise<WpTerm[]>;
 }

@@ -3,7 +3,7 @@ import type { WpPost } from '@dbp-wp/core';
 import { createPostsTable, sortIndicator } from './postsTable';
 
 function post(id: number, menuOrder: number, title: string): WpPost {
-  return { id, type: 'post', status: 'publish', title, menuOrder, meta: {} };
+  return { id, type: 'post', status: 'publish', title, menuOrder, meta: {}, terms: {} };
 }
 
 const posts: WpPost[] = [post(2, 3, 'B'), post(1, 1, 'A'), post(3, 2, 'C')];

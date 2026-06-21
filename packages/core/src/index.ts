@@ -4,9 +4,12 @@ export type {
   WpPostEdit,
   WpPostResponse,
   WpPostType,
+  WpTaxonomy,
+  WpTerm,
   WpMedia,
   ListPostsParams,
   ListMediaParams,
+  ListTermsParams,
   UpdatePostFields,
   DeleteMetaResult,
 } from './types';
@@ -18,6 +21,8 @@ export {
   normalizeSiteUrl,
   normalizeMedia,
   normalizePostForEdit,
+  normalizeTaxonomies,
+  normalizeTerm,
   buildContentDisposition,
 } from './wp-client';
 export { renderMarkdown } from './markdown';

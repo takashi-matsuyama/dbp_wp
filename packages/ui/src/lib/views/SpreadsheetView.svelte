@@ -1,12 +1,16 @@
 <script lang="ts">
-  import type { WpMedia, WpPost, WpPostType } from '@dbp-wp/core';
+  import { onMount } from 'svelte';
+  import type { WpMedia, WpPost, WpPostType, WpTaxonomy, WpTerm } from '@dbp-wp/core';
   import { deriveChildren, getRelation, renderChildData, renderRecordTemplate } from '@dbp-wp/core';
   import {
     bulkDeleteMeta,
     clearRelation,
     fetchPosts,
+    fetchTaxonomies,
+    fetchTerms,
     listMedia,
     resolveMedia,
+    resolveTerms,
     savePosts,
     setRelation,
     uploadMedia,
@@ -568,6 +572,174 @@
     }
   }
 
+  // --- Taxonomy (categories/tags) — core REST, no connector ---
+  let taxonomies = $state<WpTaxonomy[]>([]);
+  // Per-post, per-taxonomy (REST base) draft term-ID arrays. A draft wins over the saved terms.
+  let termDrafts = $state<Record<number, Record<string, number[]>>>({});
+  // Flat cache of term id → name (term ids are unique across taxonomies in WordPress), filled
+  // lazily so the lean post listing stays embed-free.
+  let termNames = $state<Record<number, string>>({});
+  // Non-reactive guard so each term id is only resolved once (avoids an effect loop).
+  const requestedTermIds = new Set<number>();
+
+  onMount(() => {
+    void loadTaxonomies();
+  });
+
+  async function loadTaxonomies(): Promise<void> {
+    try {
+      taxonomies = await fetchTaxonomies(type);
+    } catch {
+      // Non-fatal: the taxonomy columns just stay hidden.
+      taxonomies = [];
+    }
+  }
+
+  /** True when two id lists hold the same set (order-independent). */
+  function sameIds(a: number[], b: number[]): boolean {
+    if (a.length !== b.length) {
+      return false;
+    }
+    const set = new Set(a);
+    return b.every((id) => set.has(id));
+  }
+
+  /** The term ids shown for a post in a taxonomy: a draft wins, else the saved assignment. */
+  function effectiveTerms(post: WpPost, restBase: string): number[] {
+    return termDrafts[post.id]?.[restBase] ?? post.terms[restBase] ?? [];
+  }
+
+  function isTermsChanged(post: WpPost, restBase: string): boolean {
+    const draft = termDrafts[post.id]?.[restBase];
+    return draft !== undefined && !sameIds(draft, post.terms[restBase] ?? []);
+  }
+
+  function termLabel(post: WpPost, restBase: string): string {
+    const ids = effectiveTerms(post, restBase);
+    return ids.length === 0 ? '—' : ids.map((id) => termNames[id] ?? `#${id}`).join(', ');
+  }
+
+  async function resolveTermNames(restBase: string, ids: number[]): Promise<void> {
+    try {
+      const terms = await resolveTerms(restBase, ids);
+      const next = { ...termNames };
+      for (const t of terms) {
+        next[t.id] = t.name;
+      }
+      termNames = next;
+    } catch {
+      // Best-effort labels: unmark so a later render can retry a transient failure.
+      for (const id of ids) {
+        requestedTermIds.delete(id);
+      }
+    }
+  }
+
+  // Resolve names for the term ids on the loaded posts + drafts (once per id, grouped by taxonomy).
+  $effect(() => {
+    const byTax: Record<string, number[]> = {};
+    for (const post of posts) {
+      for (const tax of taxonomies) {
+        for (const id of effectiveTerms(post, tax.restBase)) {
+          if (!requestedTermIds.has(id)) {
+            requestedTermIds.add(id);
+            (byTax[tax.restBase] ??= []).push(id);
+          }
+        }
+      }
+    }
+    for (const [restBase, ids] of Object.entries(byTax)) {
+      if (ids.length > 0) {
+        void resolveTermNames(restBase, ids);
+      }
+    }
+  });
+
+  // --- Term picker (modal) ---
+  let termPickerPost = $state<number | null>(null);
+  let termPickerTax = $state<WpTaxonomy | null>(null);
+  let termSelection = $state<number[]>([]); // ids being edited in the open picker
+  let termItems = $state<WpTerm[]>([]);
+  let termPage = $state(1);
+  let termTotalPages = $state(1);
+  let termSearch = $state('');
+  let termLoading = $state(false);
+  let termError = $state<string | null>(null);
+
+  async function loadTerms(): Promise<void> {
+    const tax = termPickerTax;
+    if (!tax) {
+      return;
+    }
+    termLoading = true;
+    termError = null;
+    try {
+      const search = termSearch.trim();
+      const res = await fetchTerms(tax.restBase, search ? { page: termPage, search } : { page: termPage });
+      termItems = res.items;
+      termTotalPages = res.totalPages;
+      // Cache names so the grid can label freshly listed terms immediately.
+      const next = { ...termNames };
+      for (const t of res.items) {
+        next[t.id] = t.name;
+      }
+      termNames = next;
+    } catch (e) {
+      termError = e instanceof Error ? e.message : String(e);
+    } finally {
+      termLoading = false;
+    }
+  }
+
+  function openTermPicker(post: WpPost, tax: WpTaxonomy): void {
+    termPickerPost = post.id;
+    termPickerTax = tax;
+    termSelection = [...effectiveTerms(post, tax.restBase)];
+    termSearch = '';
+    termPage = 1;
+    termError = null;
+    void loadTerms();
+  }
+
+  function closeTermPicker(): void {
+    termPickerPost = null;
+    termPickerTax = null;
+  }
+
+  function searchTerms(): void {
+    termPage = 1;
+    void loadTerms();
+  }
+
+  function gotoTermPage(page: number): void {
+    const next = Math.min(Math.max(1, page), termTotalPages);
+    if (next !== termPage) {
+      termPage = next;
+      void loadTerms();
+    }
+  }
+
+  function toggleTerm(term: WpTerm): void {
+    termSelection = termSelection.includes(term.id)
+      ? termSelection.filter((id) => id !== term.id)
+      : [...termSelection, term.id];
+    termNames = { ...termNames, [term.id]: term.name };
+  }
+
+  // Commit the picker's selection as the row's draft for that taxonomy (rides the existing Save).
+  function applyTermSelection(): void {
+    const postId = termPickerPost;
+    const tax = termPickerTax;
+    if (postId === null || !tax) {
+      return;
+    }
+    termDrafts = {
+      ...termDrafts,
+      [postId]: { ...termDrafts[postId], [tax.restBase]: [...termSelection] },
+    };
+    closeTermPicker();
+  }
+
   // --- Drag-and-drop reorder (→ menu_order) ---
   // `rowOrder` is the dragged display order (post ids); it is used only while it is a valid
   // permutation of the loaded posts, otherwise the grid falls back to the posts' own order
@@ -640,6 +812,7 @@
     return (
       fieldChanged ||
       isFeaturedChanged(post) ||
+      taxonomies.some((tax) => isTermsChanged(post, tax.restBase)) ||
       metaColumns.some((key) => isMetaChanged(post, key))
     );
   }
@@ -682,6 +855,16 @@
         // The draft is the new featured_media id (0 removes it).
         update.featuredMedia = featured;
       }
+      const termsUpdate: Record<string, number[]> = {};
+      for (const tax of taxonomies) {
+        if (isTermsChanged(post, tax.restBase)) {
+          // An empty array clears that taxonomy's terms.
+          termsUpdate[tax.restBase] = effectiveTerms(post, tax.restBase);
+        }
+      }
+      if (Object.keys(termsUpdate).length > 0) {
+        update.terms = termsUpdate;
+      }
       const meta: Record<string, string> = {};
       for (const key of metaColumns) {
         if (isMetaChanged(post, key)) {
@@ -716,14 +899,17 @@
         const remaining = { ...drafts };
         const remainingMeta = { ...metaDrafts };
         const remainingFeatured = { ...featuredDrafts };
+        const remainingTerms = { ...termDrafts };
         for (const id of succeeded) {
           delete remaining[id];
           delete remainingMeta[id];
           delete remainingFeatured[id];
+          delete remainingTerms[id];
         }
         drafts = remaining;
         metaDrafts = remainingMeta;
         featuredDrafts = remainingFeatured;
+        termDrafts = remainingTerms;
         await onsaved();
       }
     } catch (e) {
@@ -808,6 +994,9 @@
         <th>Title</th>
         <th>Menu order</th>
         <th>Featured</th>
+        {#each taxonomies as tax (tax.restBase)}
+          <th>{tax.name}</th>
+        {/each}
         {#if connectorAvailable}
           <th>Parent</th>
           <th>Children</th>
@@ -923,6 +1112,18 @@
               >
             {/if}
           </td>
+          {#each taxonomies as tax (tax.restBase)}
+            <td class="taxonomy-cell" class:changed-cell={isTermsChanged(post, tax.restBase)}>
+              <span class="term-list" title={termLabel(post, tax.restBase)}
+                >{termLabel(post, tax.restBase)}</span
+              >
+              <button
+                class="rel-edit"
+                onclick={() => openTermPicker(post, tax)}
+                disabled={saving || deleteBusy || relBusy}>Edit</button
+              >
+            </td>
+          {/each}
           {#if connectorAvailable}
             <td class="relation-cell">
               {#if relationRow === post.id}
@@ -1071,6 +1272,70 @@
   </div>
 {/if}
 
+{#if termPickerPost !== null && termPickerTax}
+  <div
+    class="picker-overlay"
+    role="presentation"
+    onclick={(e) => {
+      if (e.target === e.currentTarget) closeTermPicker();
+    }}
+  >
+    <div class="picker" role="dialog" aria-modal="true" aria-label="{termPickerTax.name} terms">
+      <div class="picker-head">
+        <strong>{termPickerTax.name}</strong>
+        <input
+          class="picker-search"
+          bind:value={termSearch}
+          placeholder="Search terms…"
+          onkeydown={(e) => e.key === 'Enter' && searchTerms()}
+        />
+        <button onclick={searchTerms} disabled={termLoading}>Search</button>
+        <button class="picker-close" onclick={closeTermPicker} aria-label="Close">×</button>
+      </div>
+      <p class="term-selection">
+        {termSelection.length === 0
+          ? 'No terms selected.'
+          : `Selected: ${termSelection.map((id) => termNames[id] ?? `#${id}`).join(', ')}`}
+      </p>
+      {#if termError}<p class="error">{termError}</p>{/if}
+      {#if termLoading}
+        <p class="picker-status">Loading…</p>
+      {:else if termItems.length === 0}
+        <p class="picker-status">No terms found.</p>
+      {:else}
+        <ul class="term-options">
+          {#each termItems as term (term.id)}
+            <li>
+              <label>
+                <input
+                  type="checkbox"
+                  checked={termSelection.includes(term.id)}
+                  onchange={() => toggleTerm(term)}
+                />
+                {term.name}
+              </label>
+            </li>
+          {/each}
+        </ul>
+      {/if}
+      <div class="picker-pager">
+        <button onclick={() => gotoTermPage(termPage - 1)} disabled={termLoading || termPage <= 1}
+          >‹ Prev</button
+        >
+        <span>Page {termPage} / {termTotalPages}</span>
+        <button
+          onclick={() => gotoTermPage(termPage + 1)}
+          disabled={termLoading || termPage >= termTotalPages}>Next ›</button
+        >
+      </div>
+      <div class="term-actions">
+        <button class="primary" onclick={applyTermSelection}>Apply</button>
+        <button onclick={closeTermPicker}>Cancel</button>
+      </div>
+    </div>
+  </div>
+{/if}
+
 <style>
   .meta-bar {
     display: flex;
@@ -1188,6 +1453,44 @@
   }
   .featured-cell.changed-cell {
     background: rgba(255, 215, 0, 0.18);
+  }
+  .taxonomy-cell.changed-cell {
+    background: rgba(255, 215, 0, 0.18);
+  }
+  .term-list {
+    display: inline-block;
+    max-width: 12rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    vertical-align: middle;
+    font-size: 0.85rem;
+  }
+  .term-selection {
+    margin: 0.25rem 0;
+    font-size: 0.8rem;
+    opacity: 0.85;
+  }
+  .term-options {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    max-height: 18rem;
+    overflow-y: auto;
+  }
+  .term-options li {
+    padding: 0.15rem 0;
+  }
+  .term-options label {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    cursor: pointer;
+  }
+  .term-actions {
+    display: flex;
+    gap: 0.5rem;
+    margin-top: 0.5rem;
   }
   .featured-thumb {
     width: 2rem;

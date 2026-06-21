@@ -3,7 +3,7 @@ import type { WpPost } from '@dbp-wp/core';
 import { computeMenuOrders } from './formula';
 
 function post(id: number, menuOrder: number): WpPost {
-  return { id, type: 'post', status: 'publish', title: 't', menuOrder, meta: {} };
+  return { id, type: 'post', status: 'publish', title: 't', menuOrder, meta: {}, terms: {} };
 }
 
 const posts: WpPost[] = [post(2, 3), post(1, 1), post(3, 2)];

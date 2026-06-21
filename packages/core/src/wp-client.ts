@@ -10,6 +10,7 @@ import type {
   DeleteMetaResult,
   ListMediaParams,
   ListPostsParams,
+  ListTermsParams,
   UpdatePostFields,
   WpCredentials,
   WpMedia,
@@ -17,6 +18,8 @@ import type {
   WpPostEdit,
   WpPostResponse,
   WpPostType,
+  WpTaxonomy,
+  WpTerm,
 } from './types';
 
 /** Hosts for which plain http is tolerated (local development). */
@@ -25,6 +28,10 @@ const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]', '::1']);
 /** Allowed characters for a REST route segment (post type slug). No dots: a `.`/`..`
  *  segment would be resolved by the URL parser and traverse the REST path. */
 const ROUTE_SEGMENT = /^[a-z0-9_-]+$/i;
+
+/** JS magic property names that pass {@link ROUTE_SEGMENT} but are unsafe as plain-object keys
+ *  (prototype pollution / silent drop). A taxonomy REST base matching one is rejected. */
+const RESERVED_KEYS = new Set(['__proto__', 'prototype', 'constructor']);
 
 /** REST field added by the companion plugin to carry arbitrary post meta. */
 const META_FIELD = 'dbp_wp_meta';
@@ -536,6 +543,74 @@ export class WpClient {
     }
     return out;
   }
+
+  /**
+   * List the REST-enabled taxonomies, optionally filtered to those that apply to a post type
+   * (e.g. categories and tags for `posts`). A core REST call — no companion plugin needed.
+   */
+  async listTaxonomies(type?: string): Promise<WpTaxonomy[]> {
+    const query = new URLSearchParams({ context: 'edit' });
+    if (type !== undefined) {
+      assertRouteSegment(type);
+      query.set('type', type);
+    }
+    const raw = await this.request<unknown>(`/wp/v2/taxonomies?${query.toString()}`);
+    return normalizeTaxonomies(raw);
+  }
+
+  /**
+   * List terms of a taxonomy (`GET /wp/v2/<taxRestBase>`), paginated/searchable, reading the
+   * `X-WP-TotalPages` header so the picker can page through. A core REST call — no plugin needed.
+   */
+  async listTerms(
+    taxRestBase: string,
+    params: ListTermsParams = {},
+  ): Promise<{ items: WpTerm[]; totalPages: number }> {
+    assertRouteSegment(taxRestBase);
+    const perPage = clampInt(params.perPage ?? 100, 1, 100);
+    const page = clampInt(params.page ?? 1, 1, Number.MAX_SAFE_INTEGER);
+    const query = new URLSearchParams({
+      context: 'edit',
+      per_page: String(perPage),
+      page: String(page),
+    });
+    const search = params.search?.trim();
+    if (search) {
+      query.set('search', search);
+    }
+    const response = await this.send(`/wp/v2/${taxRestBase}?${query.toString()}`);
+    const raw = (await response.json()) as unknown;
+    return {
+      items: Array.isArray(raw) ? raw.map(normalizeTerm) : [],
+      totalPages: parseTotalPages(response.headers.get('X-WP-TotalPages')),
+    };
+  }
+
+  /**
+   * Resolve specific term ids to their names in one request per 100 ids (`?include=`), used to
+   * label the taxonomy columns for the posts currently shown. A core REST call — no plugin needed.
+   */
+  async resolveTerms(taxRestBase: string, ids: number[]): Promise<WpTerm[]> {
+    assertRouteSegment(taxRestBase);
+    const clean = [...new Set(ids.filter((id) => Number.isSafeInteger(id) && id > 0))];
+    if (clean.length === 0) {
+      return [];
+    }
+    const out: WpTerm[] = [];
+    for (let i = 0; i < clean.length; i += 100) {
+      const chunk = clean.slice(i, i + 100);
+      const query = new URLSearchParams({
+        context: 'edit',
+        include: chunk.join(','),
+        per_page: String(chunk.length),
+      });
+      const raw = await this.request<unknown>(`/wp/v2/${taxRestBase}?${query.toString()}`);
+      if (Array.isArray(raw)) {
+        out.push(...raw.map(normalizeTerm));
+      }
+    }
+    return out;
+  }
 }
 
 /** Map editable fields to the WordPress REST request body (camelCase → snake_case). */
@@ -557,6 +632,17 @@ export function buildUpdateBody(fields: UpdatePostFields): Record<string, unknow
   if (fields.content !== undefined) {
     // `''` is meaningful here (clears the body), so check for undefined, not falsy.
     body.content = fields.content;
+  }
+  if (fields.terms !== undefined) {
+    // Each taxonomy is sent as its own REST field keyed by REST base (e.g. `categories`); an
+    // empty array clears that taxonomy's terms. Guard the key so an odd REST base can't inject
+    // an unrelated body field, and skip JS magic names (`__proto__` etc.) that would pollute or
+    // silently drop on this plain object.
+    for (const [restBase, ids] of Object.entries(fields.terms)) {
+      if (ROUTE_SEGMENT.test(restBase) && !RESERVED_KEYS.has(restBase)) {
+        body[restBase] = ids;
+      }
+    }
   }
   return body;
 }
@@ -754,6 +840,76 @@ export function normalizePostTypes(raw: unknown): WpPostType[] {
   return result;
 }
 
+/**
+ * Normalize the `/wp/v2/taxonomies` response (an object keyed by taxonomy slug) into a list.
+ * Skips entries without a valid `rest_base` (not addressable over REST), mirroring
+ * {@link normalizePostTypes}.
+ */
+export function normalizeTaxonomies(raw: unknown): WpTaxonomy[] {
+  if (typeof raw !== 'object' || raw === null) {
+    return [];
+  }
+  const result: WpTaxonomy[] = [];
+  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (typeof value !== 'object' || value === null) {
+      continue;
+    }
+    const entry = value as Record<string, unknown>;
+    // Reject a magic-name REST base (e.g. `__proto__`): it passes the route allowlist but is
+    // unsafe as a key in the plain-object term maps the UI and write path build.
+    if (
+      typeof entry.rest_base !== 'string' ||
+      !ROUTE_SEGMENT.test(entry.rest_base) ||
+      RESERVED_KEYS.has(entry.rest_base)
+    ) {
+      continue;
+    }
+    result.push({
+      slug: typeof entry.slug === 'string' ? entry.slug : key,
+      restBase: entry.rest_base,
+      name: typeof entry.name === 'string' ? entry.name : key,
+      hierarchical: entry.hierarchical === true,
+    });
+  }
+  return result;
+}
+
+/**
+ * Normalize a raw `/wp/v2/<taxonomy>` term. Accepts `unknown` and guards each field, so a
+ * malformed entry degrades to a zero id / empty name rather than throwing.
+ */
+export function normalizeTerm(raw: unknown): WpTerm {
+  const obj = (typeof raw === 'object' && raw !== null ? raw : {}) as Record<string, unknown>;
+  return {
+    id: typeof obj.id === 'number' ? obj.id : 0,
+    name: typeof obj.name === 'string' ? obj.name : '',
+    parent: typeof obj.parent === 'number' ? obj.parent : 0,
+  };
+}
+
+/**
+ * Extract taxonomy term-ID assignments from a raw post, keyed by the taxonomy's REST base.
+ *
+ * On a WordPress post the only top-level fields that are arrays of positive integers are
+ * taxonomy assignments (e.g. `categories`, `tags`, custom taxonomies), so capture exactly those.
+ * The UI reads only the taxonomies it knows about (from `/wp/v2/taxonomies`), so a stray numeric
+ * array would simply be ignored downstream. Empty arrays are omitted (no terms assigned). Uses a
+ * null-prototype map so a pathological key (`__proto__`) is an ordinary own property.
+ */
+function extractPostTerms(raw: WpPostResponse): Record<string, number[]> {
+  const result: Record<string, number[]> = Object.create(null) as Record<string, number[]>;
+  for (const [key, value] of Object.entries(raw as unknown as Record<string, unknown>)) {
+    if (
+      Array.isArray(value) &&
+      value.length > 0 &&
+      value.every((v) => typeof v === 'number' && Number.isInteger(v) && v > 0)
+    ) {
+      result[key] = value as number[];
+    }
+  }
+  return result;
+}
+
 export function normalizePost(raw: WpPostResponse): WpPost {
   const post: WpPost = {
     id: raw.id,
@@ -762,6 +918,7 @@ export function normalizePost(raw: WpPostResponse): WpPost {
     title: raw.title.raw ?? raw.title.rendered,
     menuOrder: raw.menu_order,
     meta: raw.meta,
+    terms: extractPostTerms(raw),
   };
   if (raw.dbp_wp_meta !== undefined) {
     post.dbpWpMeta = raw.dbp_wp_meta;

@@ -84,6 +84,13 @@ export interface WpPost {
    * URL is resolved separately ({@link WpMedia}) so the listing stays lean.
    */
   featuredMedia?: number;
+  /**
+   * Assigned taxonomy term IDs keyed by the taxonomy's REST base (e.g. `terms.categories`,
+   * `terms.tags`). A core REST field — no companion plugin needed. Term IDs are resolved to
+   * names separately ({@link WpTerm}) so the listing stays lean. Always present (possibly an
+   * empty map); a taxonomy with no assigned terms is an empty array or absent key.
+   */
+  terms: Record<string, number[]>;
 }
 
 /**
@@ -108,6 +115,12 @@ export interface UpdatePostFields {
    * sets this. No companion plugin needed.
    */
   content?: string;
+  /**
+   * Assigned taxonomy term IDs keyed by the taxonomy's REST base (e.g. `{ categories: [1, 2],
+   * tags: [3] }`). Each taxonomy is sent as that REST field; an empty array clears the
+   * post's terms for that taxonomy. A core REST field — no companion plugin needed.
+   */
+  terms?: Record<string, number[]>;
 }
 
 /**
@@ -141,6 +154,38 @@ export interface WpPostType {
   restBase: string;
   /** Human-readable name (e.g. `Posts`). */
   name: string;
+}
+
+/** A WordPress taxonomy available over REST (e.g. categories, tags, custom taxonomies). */
+export interface WpTaxonomy {
+  /** Internal taxonomy slug (e.g. `category`). */
+  slug: string;
+  /** REST route base used to list terms and assign them on a post (e.g. `categories`). */
+  restBase: string;
+  /** Human-readable name (e.g. `Categories`). */
+  name: string;
+  /** Whether terms form a hierarchy (categories) rather than a flat list (tags). */
+  hierarchical: boolean;
+}
+
+/** A normalized taxonomy term, as used by the taxonomy picker and the spreadsheet's columns. */
+export interface WpTerm {
+  /** Term ID. */
+  id: number;
+  /** Term name (display label). */
+  name: string;
+  /** Parent term ID for a hierarchical taxonomy; `0` (or absent) for a top-level/flat term. */
+  parent: number;
+}
+
+/** Parameters for listing taxonomy terms. */
+export interface ListTermsParams {
+  /** 1-based page number. Defaults to 1. */
+  page?: number;
+  /** Page size (WordPress caps this at 100). Defaults to 100. */
+  perPage?: number;
+  /** Free-text search across term names/slugs. */
+  search?: string;
 }
 
 /** Result of a per-post meta delete via the companion plugin. */

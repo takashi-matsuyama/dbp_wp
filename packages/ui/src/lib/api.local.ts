@@ -1,4 +1,12 @@
-import type { PrintRecord, WpMedia, WpPost, WpPostEdit, WpPostType } from '@dbp-wp/core';
+import type {
+  PrintRecord,
+  WpMedia,
+  WpPost,
+  WpPostEdit,
+  WpPostType,
+  WpTaxonomy,
+  WpTerm,
+} from '@dbp-wp/core';
 import type {
   ConnectionStatus,
   ImportCreateInput,
@@ -9,6 +17,7 @@ import type {
   PostUpdate,
   PostsResponse,
   PrintRecordsResponse,
+  TermListResult,
   UpdateResult,
 } from './api.types';
 import { DEMO_COUNTRIES, DEMO_REGIONS } from './demo-seed';
@@ -27,6 +36,17 @@ import { DEMO_COUNTRIES, DEMO_REGIONS } from './demo-seed';
 const COUNTRY_TYPE = 'posts'; // the default tab in App.svelte
 const REGION_TYPE = 'regions';
 
+/** A demo taxonomy (REST base `topics`) so the spreadsheet's taxonomy columns have data to edit. */
+const TOPICS_REST_BASE = 'topics';
+const DEMO_TERMS: WpTerm[] = [
+  { id: 1, name: 'Economy', parent: 0 },
+  { id: 2, name: 'Geography', parent: 0 },
+  { id: 3, name: 'Politics', parent: 0 },
+  { id: 4, name: 'Culture', parent: 0 },
+  { id: 5, name: 'History', parent: 0 },
+  { id: 6, name: 'Environment', parent: 0 },
+];
+
 /** An in-memory demo record carrying everything the spreadsheet and Print views need. */
 interface DemoRecord {
   id: number;
@@ -41,6 +61,8 @@ interface DemoRecord {
   featuredMedia?: number;
   meta: Record<string, string>;
   tax: Record<string, string[]>;
+  /** Assigned taxonomy term IDs keyed by REST base (e.g. `topics`), mirroring core's `terms`. */
+  terms: Record<string, number[]>;
   parent?: number;
   parentType?: string;
   /** Lossless Markdown source (Markdown-mode posts only), mirroring `_dbp_wp_markdown`. */
@@ -80,6 +102,7 @@ function seed(): DemoRecord[] {
     featuredImageUrl: PLACEHOLDER_IMAGE,
     meta: {},
     tax: { region: [r.name] },
+    terms: {},
   }));
 
   const countries: DemoRecord[] = DEMO_COUNTRIES.map((c, i) => ({
@@ -104,6 +127,8 @@ function seed(): DemoRecord[] {
       surface_area_km2: num(c.surfaceArea),
     },
     tax: { region: [c.region], income: c.incomeLevel ? [c.incomeLevel] : [] },
+    // Seed one demo topic per country (deterministic) so the taxonomy column has data to edit.
+    terms: { [TOPICS_REST_BASE]: [(i % DEMO_TERMS.length) + 1] },
     ...(c.parentRegionId !== null
       ? { parent: c.parentRegionId, parentType: REGION_TYPE }
       : {}),
@@ -139,6 +164,7 @@ function toWpPost(d: DemoRecord): WpPost {
     menuOrder: d.menuOrder,
     meta: {},
     dbpWpMeta: { ...d.meta },
+    terms: Object.fromEntries(Object.entries(d.terms).map(([k, v]) => [k, [...v]])),
   };
   if (d.parent !== undefined) {
     post.parent = d.parent;
@@ -292,6 +318,11 @@ export function savePosts(updates: PostUpdate[]): Promise<UpdateResult[]> {
         if (m) post.featuredImageUrl = m.sourceUrl;
       }
     }
+    if (update.terms) {
+      for (const [restBase, ids] of Object.entries(update.terms)) {
+        post.terms[restBase] = [...ids]; // an empty array clears that taxonomy
+      }
+    }
     if (update.meta) {
       for (const [key, value] of Object.entries(update.meta)) {
         post.meta[key] = value == null ? '' : String(value);
@@ -323,6 +354,7 @@ export function importPosts(creates: ImportCreateInput[]): Promise<ImportResult[
       featuredImageUrl: PLACEHOLDER_IMAGE,
       meta,
       tax: { region: [], income: [] },
+      terms: {},
     });
     results.push({ index, ok: true, id });
   }
@@ -418,4 +450,45 @@ export function listMedia(query?: { page?: number; search?: string }): Promise<M
 export function resolveMedia(ids: number[]): Promise<WpMedia[]> {
   const wanted = new Set(ids);
   return Promise.resolve(mediaStore.filter((m) => wanted.has(m.id)).map(toWpMedia));
+}
+
+/** How many terms the demo picker shows per page. */
+const TERMS_PER_PAGE = 12;
+
+export function fetchTaxonomies(type: string): Promise<WpTaxonomy[]> {
+  // Only the country type carries the demo "Topics" taxonomy; regions have none.
+  if (type !== COUNTRY_TYPE) {
+    return Promise.resolve([]);
+  }
+  return Promise.resolve([
+    { slug: 'topic', restBase: TOPICS_REST_BASE, name: 'Topics', hierarchical: false },
+  ]);
+}
+
+export function fetchTerms(
+  taxonomy: string,
+  query?: { page?: number; search?: string },
+): Promise<TermListResult> {
+  if (taxonomy !== TOPICS_REST_BASE) {
+    return Promise.resolve({ items: [], totalPages: 1 });
+  }
+  const search = query?.search?.trim().toLowerCase();
+  const filtered = search
+    ? DEMO_TERMS.filter((t) => t.name.toLowerCase().includes(search))
+    : DEMO_TERMS;
+  const totalPages = Math.max(1, Math.ceil(filtered.length / TERMS_PER_PAGE));
+  const page = Math.min(Math.max(1, query?.page ?? 1), totalPages);
+  const start = (page - 1) * TERMS_PER_PAGE;
+  return Promise.resolve({
+    items: filtered.slice(start, start + TERMS_PER_PAGE).map((t) => ({ ...t })),
+    totalPages,
+  });
+}
+
+export function resolveTerms(taxonomy: string, ids: number[]): Promise<WpTerm[]> {
+  if (taxonomy !== TOPICS_REST_BASE) {
+    return Promise.resolve([]);
+  }
+  const wanted = new Set(ids);
+  return Promise.resolve(DEMO_TERMS.filter((t) => wanted.has(t.id)).map((t) => ({ ...t })));
 }

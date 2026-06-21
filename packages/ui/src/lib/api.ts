@@ -29,3 +29,6 @@ export const clearRelation = impl.clearRelation;
 export const uploadMedia = impl.uploadMedia;
 export const listMedia = impl.listMedia;
 export const resolveMedia = impl.resolveMedia;
+export const fetchTaxonomies = impl.fetchTaxonomies;
+export const fetchTerms = impl.fetchTerms;
+export const resolveTerms = impl.resolveTerms;

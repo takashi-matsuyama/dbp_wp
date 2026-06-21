@@ -10,9 +10,10 @@ import type {
   PostUpdate,
   PostsResponse,
   PrintRecordsResponse,
+  TermListResult,
   UpdateResult,
 } from './api.types';
-import type { WpMedia, WpPost, WpPostEdit, WpPostType } from '@dbp-wp/core';
+import type { WpMedia, WpPost, WpPostEdit, WpPostType, WpTaxonomy, WpTerm } from '@dbp-wp/core';
 
 // The CLI-backed data layer. The UI talks only to the local CLI server (`/api/...`), never
 // to WordPress directly, so the browser never holds credentials and is not subject to
@@ -324,6 +325,62 @@ export async function resolveMedia(ids: number[]): Promise<WpMedia[]> {
     throw new Error(`Failed to resolve media: ${res.status}`);
   }
   const data = (await res.json()) as { items?: WpMedia[] };
+  return Array.isArray(data.items) ? data.items : [];
+}
+
+/** Build the local API path for listing/searching a taxonomy's terms. Exported for unit testing. */
+export function termsPath(
+  taxonomy: string,
+  query: { page?: number; search?: string } = {},
+): string {
+  const params = new URLSearchParams({ taxonomy });
+  if (query.page && query.page > 1) {
+    params.set('page', String(query.page));
+  }
+  if (query.search && query.search.trim() !== '') {
+    params.set('search', query.search.trim());
+  }
+  return `/api/terms?${params.toString()}`;
+}
+
+/** List the taxonomies applicable to a post type (for the spreadsheet's taxonomy columns). */
+export async function fetchTaxonomies(type: string): Promise<WpTaxonomy[]> {
+  const res = await fetch(`/api/taxonomies?type=${encodeURIComponent(type)}`);
+  if (!res.ok) {
+    throw new Error(`Failed to load taxonomies: ${res.status}`);
+  }
+  const data = (await res.json()) as { taxonomies?: unknown };
+  return Array.isArray(data.taxonomies) ? (data.taxonomies as WpTaxonomy[]) : [];
+}
+
+/** List a taxonomy's terms for the picker (paginated, optionally searched). */
+export async function fetchTerms(
+  taxonomy: string,
+  query: { page?: number; search?: string } = {},
+): Promise<TermListResult> {
+  const res = await fetch(termsPath(taxonomy, query));
+  if (!res.ok) {
+    throw new Error(`Failed to load terms: ${res.status}`);
+  }
+  const data = (await res.json()) as Partial<TermListResult>;
+  return {
+    items: Array.isArray(data.items) ? data.items : [],
+    totalPages: typeof data.totalPages === 'number' && data.totalPages > 0 ? data.totalPages : 1,
+  };
+}
+
+/** Resolve specific term ids to their names (to label the taxonomy columns in the grid). */
+export async function resolveTerms(taxonomy: string, ids: number[]): Promise<WpTerm[]> {
+  if (ids.length === 0) {
+    return [];
+  }
+  const res = await fetch(
+    `/api/terms?taxonomy=${encodeURIComponent(taxonomy)}&include=${ids.join(',')}`,
+  );
+  if (!res.ok) {
+    throw new Error(`Failed to resolve terms: ${res.status}`);
+  }
+  const data = (await res.json()) as { items?: WpTerm[] };
   return Array.isArray(data.items) ? data.items : [];
 }
 

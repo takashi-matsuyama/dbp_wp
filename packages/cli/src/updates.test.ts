@@ -99,6 +99,18 @@ describe('parseBatchUpdates', () => {
     expect(Object.keys(meta)).toEqual(expect.arrayContaining(['__proto__', 'sku']));
     expect(({} as Record<string, unknown>)['kept']).toBeUndefined();
   });
+
+  it('parses taxonomy terms (per-taxonomy id arrays, empty array clears) and rejects bad shapes', () => {
+    const parsed = parseBatchUpdates({ updates: [{ id: 1, terms: { categories: [1, 2], tags: [] } }] });
+    expect(parsed).not.toBeNull();
+    expect({ ...parsed?.[0]?.fields.terms }).toEqual({ categories: [1, 2], tags: [] });
+    expect(parseBatchUpdates({ updates: [{ id: 1, terms: { 'bad base': [1] } }] })).toBeNull();
+    expect(parseBatchUpdates({ updates: [{ id: 1, terms: { categories: [0] } }] })).toBeNull();
+    expect(parseBatchUpdates({ updates: [{ id: 1, terms: { categories: ['x'] } }] })).toBeNull();
+    expect(parseBatchUpdates({ updates: [{ id: 1, terms: [1, 2] }] })).toBeNull();
+    // An empty terms object is nothing to do → the row is rejected when it is the only field.
+    expect(parseBatchUpdates({ updates: [{ id: 1, terms: {} }] })).toBeNull();
+  });
 });
 
 describe('parseImportCreates', () => {

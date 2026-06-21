@@ -13,6 +13,8 @@ import {
   normalizePostForEdit,
   normalizePostTypes,
   normalizeSiteUrl,
+  normalizeTaxonomies,
+  normalizeTerm,
   parseDeleteMetaResponse,
   sanitizeMetaKeys,
 } from './wp-client';
@@ -191,6 +193,27 @@ describe('buildUpdateBody', () => {
     expect(buildUpdateBody({ content: '<p>Hi</p>' })).toEqual({ content: '<p>Hi</p>' });
     expect(buildUpdateBody({ content: '' })).toEqual({ content: '' });
   });
+
+  it('maps terms to per-taxonomy REST fields, including an empty array (clears them)', () => {
+    expect(buildUpdateBody({ terms: { categories: [1, 2], tags: [] } })).toEqual({
+      categories: [1, 2],
+      tags: [],
+    });
+  });
+
+  it('skips taxonomy keys that are not valid REST route segments', () => {
+    expect(buildUpdateBody({ terms: { 'bad base': [1], 'a/b': [2], categories: [3] } })).toEqual({
+      categories: [3],
+    });
+  });
+
+  it('skips JS magic-name taxonomy keys (no prototype pollution / silent drop)', () => {
+    const body = buildUpdateBody(
+      JSON.parse('{"terms":{"__proto__":[1],"constructor":[2],"categories":[3]}}'),
+    );
+    expect(body).toEqual({ categories: [3] });
+    expect(({} as Record<string, unknown>)['1']).toBeUndefined(); // prototype untouched
+  });
 });
 
 describe('buildMetaBody', () => {
@@ -322,6 +345,79 @@ describe('normalizePost relation fields', () => {
     const post = normalizePost(raw({}));
     expect(post.parent).toBeUndefined();
     expect(post.parentType).toBeUndefined();
+  });
+});
+
+describe('normalizePost taxonomy terms', () => {
+  function raw(extra: Record<string, unknown>): WpPostResponse {
+    return {
+      id: 5,
+      type: 'post',
+      status: 'publish',
+      title: { rendered: 'r', raw: 'Post 5' },
+      menu_order: 0,
+      meta: {},
+      ...extra,
+    } as WpPostResponse;
+  }
+
+  it('captures number[] taxonomy fields keyed by REST base', () => {
+    expect({ ...normalizePost(raw({ categories: [1, 2], tags: [3] })).terms }).toEqual({
+      categories: [1, 2],
+      tags: [3],
+    });
+  });
+
+  it('omits empty arrays and non-numeric-array fields (author id, meta)', () => {
+    expect({ ...normalizePost(raw({ categories: [], tags: [3], author: 7 })).terms }).toEqual({
+      tags: [3],
+    });
+  });
+
+  it('defaults to an empty map when no taxonomy fields are present', () => {
+    expect({ ...normalizePost(raw({})).terms }).toEqual({});
+  });
+});
+
+describe('normalizeTaxonomies', () => {
+  it('maps the /taxonomies object to a list with rest_base and hierarchical', () => {
+    expect(
+      normalizeTaxonomies({
+        category: { name: 'Categories', slug: 'category', rest_base: 'categories', hierarchical: true },
+        post_tag: { name: 'Tags', slug: 'post_tag', rest_base: 'tags', hierarchical: false },
+      }),
+    ).toEqual([
+      { slug: 'category', restBase: 'categories', name: 'Categories', hierarchical: true },
+      { slug: 'post_tag', restBase: 'tags', name: 'Tags', hierarchical: false },
+    ]);
+  });
+
+  it('skips entries without a valid rest_base and returns [] for a non-object', () => {
+    expect(normalizeTaxonomies({ bad: { name: 'X' }, traversal: { rest_base: '..' } })).toEqual([]);
+    expect(normalizeTaxonomies(null)).toEqual([]);
+  });
+
+  it('rejects a magic-name rest_base (passes the regex but is an unsafe object key)', () => {
+    expect(
+      normalizeTaxonomies(
+        JSON.parse('{"x":{"name":"X","slug":"x","rest_base":"__proto__","hierarchical":false}}'),
+      ),
+    ).toEqual([]);
+  });
+});
+
+describe('normalizeTerm', () => {
+  it('extracts id, name, and parent', () => {
+    expect(normalizeTerm({ id: 5, name: 'News', parent: 2, slug: 'news' })).toEqual({
+      id: 5,
+      name: 'News',
+      parent: 2,
+    });
+  });
+
+  it('degrades malformed input to safe defaults', () => {
+    expect(normalizeTerm(null)).toEqual({ id: 0, name: '', parent: 0 });
+    expect(normalizeTerm({ id: 'x' })).toEqual({ id: 0, name: '', parent: 0 });
   });
 });
 

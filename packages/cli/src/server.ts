@@ -878,6 +878,87 @@ async function handleConnection(
   sendJson(res, 405, { error: 'Method not allowed' });
 }
 
+/** List the site's REST taxonomies, optionally filtered to a post type. Core REST — no plugin. */
+async function handleTaxonomies(
+  req: IncomingMessage,
+  res: ServerResponse,
+  url: URL,
+  options: ServerOptions,
+): Promise<void> {
+  if (req.method !== 'GET') {
+    sendJson(res, 405, { error: 'Method not allowed' });
+    return;
+  }
+  const credentials = options.state.credentials;
+  if (!credentials) {
+    sendJson(res, 200, { taxonomies: [] });
+    return;
+  }
+  const type = url.searchParams.get('type');
+  if (type !== null && !/^[a-z0-9_-]+$/i.test(type)) {
+    sendJson(res, 400, { error: 'Invalid post type.' });
+    return;
+  }
+  try {
+    const taxonomies = await new WpClient(credentials).listTaxonomies(type ?? undefined);
+    sendJson(res, 200, { taxonomies });
+  } catch (e) {
+    if (!res.headersSent) {
+      sendJson(res, 502, { error: e instanceof Error ? e.message : 'Upstream request failed' });
+    }
+  }
+}
+
+/**
+ * List or resolve taxonomy terms. `?taxonomy=<restBase>` is required; `?include=<ids>` resolves
+ * specific term ids (to label the grid), otherwise it lists/searches/pages. Core REST — no plugin.
+ */
+async function handleTerms(
+  req: IncomingMessage,
+  res: ServerResponse,
+  url: URL,
+  options: ServerOptions,
+): Promise<void> {
+  if (req.method !== 'GET') {
+    sendJson(res, 405, { error: 'Method not allowed' });
+    return;
+  }
+  const credentials = options.state.credentials;
+  if (!credentials) {
+    sendJson(res, 200, { items: [], totalPages: 1 });
+    return;
+  }
+  const taxonomy = url.searchParams.get('taxonomy');
+  if (taxonomy === null || !/^[a-z0-9_-]+$/i.test(taxonomy)) {
+    sendJson(res, 400, { error: 'Invalid or missing taxonomy.' });
+    return;
+  }
+  const client = new WpClient(credentials);
+  try {
+    const include = url.searchParams.get('include');
+    if (include !== null) {
+      const ids = include
+        .split(',')
+        .map((s) => Number.parseInt(s, 10))
+        .filter((n) => Number.isInteger(n));
+      sendJson(res, 200, { items: await client.resolveTerms(taxonomy, ids) });
+      return;
+    }
+    const pageRaw = url.searchParams.get('page');
+    const page = pageRaw ? Number.parseInt(pageRaw, 10) : undefined;
+    const search = url.searchParams.get('search') ?? undefined;
+    const result = await client.listTerms(taxonomy, {
+      ...(page && page > 0 ? { page } : {}),
+      ...(search ? { search } : {}),
+    });
+    sendJson(res, 200, { items: result.items, totalPages: result.totalPages });
+  } catch (e) {
+    if (!res.headersSent) {
+      sendJson(res, 502, { error: e instanceof Error ? e.message : 'Upstream request failed' });
+    }
+  }
+}
+
 async function handleApiRoutes(
   req: IncomingMessage,
   res: ServerResponse,
@@ -918,6 +999,14 @@ async function handleApiRoutes(
   }
   if (url.pathname === '/api/media') {
     await handleMedia(req, res, url, options);
+    return;
+  }
+  if (url.pathname === '/api/taxonomies') {
+    await handleTaxonomies(req, res, url, options);
+    return;
+  }
+  if (url.pathname === '/api/terms') {
+    await handleTerms(req, res, url, options);
     return;
   }
   const singlePost = SINGLE_POST_PATH.exec(url.pathname);
