@@ -160,6 +160,16 @@ export interface ApiImpl {
   fetchTaxonomies(type: string): Promise<WpTaxonomy[]>;
   /** List a taxonomy's terms for the picker, paginated/searchable (core REST). */
   fetchTerms(taxonomy: string, query?: { page?: number; search?: string }): Promise<TermListResult>;
+  /**
+   * Fetch every term of a taxonomy, for building a hierarchy tree client-side (core REST).
+   * `truncated` is true when a page cap stopped short of a very large taxonomy.
+   */
+  fetchAllTerms(
+    taxonomy: string,
+    query?: { search?: string },
+  ): Promise<{ items: WpTerm[]; truncated: boolean }>;
   /** Resolve specific term ids to their names (to label the taxonomy columns). Core REST. */
   resolveTerms(taxonomy: string, ids: number[]): Promise<WpTerm[]>;
+  /** Create a new taxonomy term, optionally under a parent (hierarchical). Core REST. */
+  createTerm(taxonomy: string, input: { name: string; parent?: number }): Promise<WpTerm>;
 }

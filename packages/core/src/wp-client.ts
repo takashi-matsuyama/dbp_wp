@@ -33,6 +33,10 @@ const ROUTE_SEGMENT = /^[a-z0-9_-]+$/i;
  *  (prototype pollution / silent drop). A taxonomy REST base matching one is rejected. */
 const RESERVED_KEYS = new Set(['__proto__', 'prototype', 'constructor']);
 
+/** Page cap for {@link WpClient.listAllTerms} (100 terms/page) — bounds a runaway on a huge
+ *  taxonomy while covering typical category trees. */
+const MAX_TERM_PAGES = 10;
+
 /** REST field added by the companion plugin to carry arbitrary post meta. */
 const META_FIELD = 'dbp_wp_meta';
 
@@ -584,6 +588,52 @@ export class WpClient {
       items: Array.isArray(raw) ? raw.map(normalizeTerm) : [],
       totalPages: parseTotalPages(response.headers.get('X-WP-TotalPages')),
     };
+  }
+
+  /**
+   * Fetch every term of a taxonomy by paging through the list, so the picker can build a complete
+   * hierarchy tree (a child's parent may be on another page). Capped at {@link MAX_TERM_PAGES}
+   * pages to avoid a runaway on a huge taxonomy. A core REST call — no companion plugin needed.
+   */
+  async listAllTerms(
+    taxRestBase: string,
+    params: { search?: string } = {},
+  ): Promise<{ items: WpTerm[]; truncated: boolean }> {
+    assertRouteSegment(taxRestBase);
+    const out: WpTerm[] = [];
+    let page = 1;
+    let totalPages = 1;
+    do {
+      const result = await this.listTerms(taxRestBase, {
+        page,
+        perPage: 100,
+        ...(params.search ? { search: params.search } : {}),
+      });
+      out.push(...result.items);
+      totalPages = result.totalPages;
+      page += 1;
+    } while (page <= totalPages && page <= MAX_TERM_PAGES);
+    // Signal when the cap stopped us short of every page, so the UI can warn rather than show a
+    // silently incomplete tree.
+    return { items: out, truncated: totalPages > MAX_TERM_PAGES };
+  }
+
+  /**
+   * Create a new term in a taxonomy (`POST /wp/v2/<taxRestBase>`), optionally under a parent
+   * (hierarchical taxonomies only; `parent` is ignored when `0`/absent). WordPress enforces the
+   * caller's term-management capability and returns the created term. A core REST call.
+   */
+  async createTerm(taxRestBase: string, input: { name: string; parent?: number }): Promise<WpTerm> {
+    assertRouteSegment(taxRestBase);
+    const body: Record<string, unknown> = { name: input.name };
+    if (typeof input.parent === 'number' && input.parent > 0) {
+      body.parent = input.parent;
+    }
+    const raw = await this.request<unknown>(`/wp/v2/${taxRestBase}?context=edit`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    });
+    return normalizeTerm(raw);
   }
 
   /**

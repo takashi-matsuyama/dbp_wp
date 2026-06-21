@@ -5,6 +5,8 @@
   import {
     bulkDeleteMeta,
     clearRelation,
+    createTerm,
+    fetchAllTerms,
     fetchPosts,
     fetchTaxonomies,
     fetchTerms,
@@ -665,6 +667,63 @@
   let termSearch = $state('');
   let termLoading = $state(false);
   let termError = $state<string | null>(null);
+  // Client-side filter over the loaded tree (hierarchical taxonomies show all terms at once).
+  let termFilter = $state('');
+  // True when a huge taxonomy was capped (only the first terms loaded) — surfaced, not silent.
+  let termsTruncated = $state(false);
+  // New-term form (in the picker).
+  let newTermName = $state('');
+  let newTermParent = $state(0); // parent term id (0 = top level), hierarchical only
+  let creatingTerm = $state(false);
+  let createError = $state<string | null>(null);
+
+  const isHierarchical = $derived(termPickerTax?.hierarchical === true);
+
+  // For a hierarchical taxonomy: a depth-flattened tree of the loaded terms (or, when a filter is
+  // active, the flat list of matches). A `seen` guard makes a malformed parent cycle terminate.
+  const treeRows = $derived.by((): Array<{ term: WpTerm; depth: number }> => {
+    if (!isHierarchical) {
+      return [];
+    }
+    const filter = termFilter.trim().toLowerCase();
+    if (filter !== '') {
+      return termItems
+        .filter((t) => t.name.toLowerCase().includes(filter))
+        .map((term) => ({ term, depth: 0 }));
+    }
+    const ids = new Set(termItems.map((t) => t.id));
+    const byParent = new Map<number, WpTerm[]>();
+    for (const t of termItems) {
+      const parent = ids.has(t.parent) ? t.parent : 0; // orphans render as roots
+      const list = byParent.get(parent);
+      if (list) {
+        list.push(t);
+      } else {
+        byParent.set(parent, [t]);
+      }
+    }
+    const rows: Array<{ term: WpTerm; depth: number }> = [];
+    const seen = new Set<number>();
+    const visit = (parentId: number, depth: number): void => {
+      for (const t of byParent.get(parentId) ?? []) {
+        if (seen.has(t.id)) {
+          continue;
+        }
+        seen.add(t.id);
+        rows.push({ term: t, depth });
+        visit(t.id, depth + 1);
+      }
+    };
+    visit(0, 0);
+    // Any term unreachable from a root (e.g. a closed parent cycle) still appears, as a root, so
+    // nothing silently vanishes from the picker.
+    for (const t of termItems) {
+      if (!seen.has(t.id)) {
+        rows.push({ term: t, depth: 0 });
+      }
+    }
+    return rows;
+  });
 
   async function loadTerms(): Promise<void> {
     const tax = termPickerTax;
@@ -674,13 +733,27 @@
     termLoading = true;
     termError = null;
     try {
-      const search = termSearch.trim();
-      const res = await fetchTerms(tax.restBase, search ? { page: termPage, search } : { page: termPage });
-      termItems = res.items;
-      termTotalPages = res.totalPages;
+      let items: WpTerm[];
+      if (tax.hierarchical) {
+        // Fetch every term so the tree is complete (a child's parent may be on another page).
+        const res = await fetchAllTerms(tax.restBase);
+        items = res.items;
+        termsTruncated = res.truncated;
+        termTotalPages = 1;
+      } else {
+        const search = termSearch.trim();
+        const res = await fetchTerms(
+          tax.restBase,
+          search ? { page: termPage, search } : { page: termPage },
+        );
+        items = res.items;
+        termsTruncated = false;
+        termTotalPages = res.totalPages;
+      }
+      termItems = items;
       // Cache names so the grid can label freshly listed terms immediately.
       const next = { ...termNames };
-      for (const t of res.items) {
+      for (const t of items) {
         next[t.id] = t.name;
       }
       termNames = next;
@@ -696,9 +769,42 @@
     termPickerTax = tax;
     termSelection = [...effectiveTerms(post, tax.restBase)];
     termSearch = '';
+    termFilter = '';
+    termsTruncated = false;
     termPage = 1;
     termError = null;
+    newTermName = '';
+    newTermParent = 0;
+    createError = null;
     void loadTerms();
+  }
+
+  // Create a new term in the open taxonomy (optionally under a parent), add it to the loaded
+  // list, and select it for the row being edited.
+  async function createNewTerm(): Promise<void> {
+    const tax = termPickerTax;
+    const name = newTermName.trim();
+    if (!tax || name === '' || creatingTerm) {
+      return;
+    }
+    creatingTerm = true;
+    createError = null;
+    try {
+      const input =
+        tax.hierarchical && newTermParent > 0 ? { name, parent: newTermParent } : { name };
+      const term = await createTerm(tax.restBase, input);
+      termItems = [...termItems, term];
+      termNames = { ...termNames, [term.id]: term.name };
+      if (!termSelection.includes(term.id)) {
+        termSelection = [...termSelection, term.id];
+      }
+      newTermName = '';
+      newTermParent = 0;
+    } catch (e) {
+      createError = e instanceof Error ? e.message : String(e);
+    } finally {
+      creatingTerm = false;
+    }
   }
 
   function closeTermPicker(): void {
@@ -1283,13 +1389,17 @@
     <div class="picker" role="dialog" aria-modal="true" aria-label="{termPickerTax.name} terms">
       <div class="picker-head">
         <strong>{termPickerTax.name}</strong>
-        <input
-          class="picker-search"
-          bind:value={termSearch}
-          placeholder="Search terms…"
-          onkeydown={(e) => e.key === 'Enter' && searchTerms()}
-        />
-        <button onclick={searchTerms} disabled={termLoading}>Search</button>
+        {#if isHierarchical}
+          <input class="picker-search" bind:value={termFilter} placeholder="Filter terms…" />
+        {:else}
+          <input
+            class="picker-search"
+            bind:value={termSearch}
+            placeholder="Search terms…"
+            onkeydown={(e) => e.key === 'Enter' && searchTerms()}
+          />
+          <button onclick={searchTerms} disabled={termLoading}>Search</button>
+        {/if}
         <button class="picker-close" onclick={closeTermPicker} aria-label="Close">×</button>
       </div>
       <p class="term-selection">
@@ -1297,9 +1407,54 @@
           ? 'No terms selected.'
           : `Selected: ${termSelection.map((id) => termNames[id] ?? `#${id}`).join(', ')}`}
       </p>
+      <div class="term-create">
+        <input
+          bind:value={newTermName}
+          placeholder="New term name…"
+          disabled={creatingTerm}
+          onkeydown={(e) => e.key === 'Enter' && createNewTerm()}
+        />
+        {#if isHierarchical}
+          <select bind:value={newTermParent} disabled={creatingTerm}>
+            <option value={0}>(top level)</option>
+            {#each termItems as t (t.id)}
+              <option value={t.id}>{t.name}</option>
+            {/each}
+          </select>
+        {/if}
+        <button onclick={createNewTerm} disabled={creatingTerm || newTermName.trim() === ''}>
+          {creatingTerm ? 'Adding…' : 'Add term'}
+        </button>
+      </div>
+      {#if createError}<p class="error">{createError}</p>{/if}
       {#if termError}<p class="error">{termError}</p>{/if}
       {#if termLoading}
         <p class="picker-status">Loading…</p>
+      {:else if isHierarchical}
+        {#if termsTruncated}
+          <p class="picker-status">
+            This taxonomy is large; only the first terms are loaded. Use the parent picker or
+            wp-admin for terms beyond the limit.
+          </p>
+        {/if}
+        {#if treeRows.length === 0}
+          <p class="picker-status">No terms found.</p>
+        {:else}
+          <ul class="term-options">
+            {#each treeRows as row (row.term.id)}
+              <li style:padding-left={`${row.depth * 1.2}rem`}>
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={termSelection.includes(row.term.id)}
+                    onchange={() => toggleTerm(row.term)}
+                  />
+                  {row.term.name}
+                </label>
+              </li>
+            {/each}
+          </ul>
+        {/if}
       {:else if termItems.length === 0}
         <p class="picker-status">No terms found.</p>
       {:else}
@@ -1317,17 +1472,17 @@
             </li>
           {/each}
         </ul>
+        <div class="picker-pager">
+          <button onclick={() => gotoTermPage(termPage - 1)} disabled={termLoading || termPage <= 1}
+            >‹ Prev</button
+          >
+          <span>Page {termPage} / {termTotalPages}</span>
+          <button
+            onclick={() => gotoTermPage(termPage + 1)}
+            disabled={termLoading || termPage >= termTotalPages}>Next ›</button
+          >
+        </div>
       {/if}
-      <div class="picker-pager">
-        <button onclick={() => gotoTermPage(termPage - 1)} disabled={termLoading || termPage <= 1}
-          >‹ Prev</button
-        >
-        <span>Page {termPage} / {termTotalPages}</span>
-        <button
-          onclick={() => gotoTermPage(termPage + 1)}
-          disabled={termLoading || termPage >= termTotalPages}>Next ›</button
-        >
-      </div>
       <div class="term-actions">
         <button class="primary" onclick={applyTermSelection}>Apply</button>
         <button onclick={closeTermPicker}>Cancel</button>
@@ -1486,6 +1641,16 @@
     align-items: center;
     gap: 0.4rem;
     cursor: pointer;
+  }
+  .term-create {
+    display: flex;
+    gap: 0.4rem;
+    align-items: center;
+    margin: 0.25rem 0;
+  }
+  .term-create input {
+    flex: 1 1 auto;
+    min-width: 0;
   }
   .term-actions {
     display: flex;

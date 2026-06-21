@@ -89,6 +89,42 @@ function parseEditableFields(record: Record<string, unknown>): UpdatePostFields 
   return fields;
 }
 
+/** A validated term-creation request. */
+export interface TermCreate {
+  taxonomy: string;
+  name: string;
+  /** Parent term ID for a hierarchical taxonomy; omitted (top-level) when absent or 0. */
+  parent?: number;
+}
+
+/**
+ * Validate a term-creation payload (`{ taxonomy, name, parent? }`) from untrusted input. The
+ * taxonomy must be a valid REST route slug, the name a non-empty (trimmed) string, and `parent`
+ * (when present) a non-negative integer. Returns null on any malformed shape. A core REST call.
+ */
+export function parseTermCreate(body: unknown): TermCreate | null {
+  if (typeof body !== 'object' || body === null) {
+    return null;
+  }
+  const record = body as Record<string, unknown>;
+  if (typeof record.taxonomy !== 'string' || !ROUTE_SLUG.test(record.taxonomy)) {
+    return null;
+  }
+  if (typeof record.name !== 'string' || record.name.trim() === '') {
+    return null;
+  }
+  const result: TermCreate = { taxonomy: record.taxonomy, name: record.name.trim() };
+  if (record.parent !== undefined) {
+    if (typeof record.parent !== 'number' || !Number.isSafeInteger(record.parent) || record.parent < 0) {
+      return null;
+    }
+    if (record.parent > 0) {
+      result.parent = record.parent;
+    }
+  }
+  return result;
+}
+
 /**
  * Validate a taxonomy-terms map (`{ <restBase>: number[] }`) from untrusted input. Each key
  * must be a valid REST route slug and each value an array of positive integer term IDs (an empty

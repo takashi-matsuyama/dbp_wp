@@ -36,16 +36,18 @@ import { DEMO_COUNTRIES, DEMO_REGIONS } from './demo-seed';
 const COUNTRY_TYPE = 'posts'; // the default tab in App.svelte
 const REGION_TYPE = 'regions';
 
-/** A demo taxonomy (REST base `topics`) so the spreadsheet's taxonomy columns have data to edit. */
+/** A demo taxonomy (REST base `topics`) so the spreadsheet's taxonomy columns have data to edit.
+ *  Hierarchical, with a couple of nested terms, to exercise the tree picker + term creation. */
 const TOPICS_REST_BASE = 'topics';
 const DEMO_TERMS: WpTerm[] = [
   { id: 1, name: 'Economy', parent: 0 },
-  { id: 2, name: 'Geography', parent: 0 },
-  { id: 3, name: 'Politics', parent: 0 },
-  { id: 4, name: 'Culture', parent: 0 },
-  { id: 5, name: 'History', parent: 0 },
+  { id: 2, name: 'Trade', parent: 1 },
+  { id: 3, name: 'Finance', parent: 1 },
+  { id: 4, name: 'Geography', parent: 0 },
+  { id: 5, name: 'Culture', parent: 0 },
   { id: 6, name: 'Environment', parent: 0 },
 ];
+let nextTermId = 7;
 
 /** An in-memory demo record carrying everything the spreadsheet and Print views need. */
 interface DemoRecord {
@@ -461,7 +463,7 @@ export function fetchTaxonomies(type: string): Promise<WpTaxonomy[]> {
     return Promise.resolve([]);
   }
   return Promise.resolve([
-    { slug: 'topic', restBase: TOPICS_REST_BASE, name: 'Topics', hierarchical: false },
+    { slug: 'topic', restBase: TOPICS_REST_BASE, name: 'Topics', hierarchical: true },
   ]);
 }
 
@@ -491,4 +493,28 @@ export function resolveTerms(taxonomy: string, ids: number[]): Promise<WpTerm[]>
   }
   const wanted = new Set(ids);
   return Promise.resolve(DEMO_TERMS.filter((t) => wanted.has(t.id)).map((t) => ({ ...t })));
+}
+
+export function fetchAllTerms(
+  taxonomy: string,
+  query?: { search?: string },
+): Promise<{ items: WpTerm[]; truncated: boolean }> {
+  if (taxonomy !== TOPICS_REST_BASE) {
+    return Promise.resolve({ items: [], truncated: false });
+  }
+  const search = query?.search?.trim().toLowerCase();
+  const items = search ? DEMO_TERMS.filter((t) => t.name.toLowerCase().includes(search)) : DEMO_TERMS;
+  return Promise.resolve({ items: items.map((t) => ({ ...t })), truncated: false });
+}
+
+export function createTerm(
+  taxonomy: string,
+  input: { name: string; parent?: number },
+): Promise<WpTerm> {
+  if (taxonomy !== TOPICS_REST_BASE) {
+    return Promise.reject(new Error('Unknown taxonomy in demo data'));
+  }
+  const term: WpTerm = { id: nextTermId++, name: input.name, parent: input.parent ?? 0 };
+  DEMO_TERMS.push(term);
+  return Promise.resolve({ ...term });
 }

@@ -31,4 +31,6 @@ export const listMedia = impl.listMedia;
 export const resolveMedia = impl.resolveMedia;
 export const fetchTaxonomies = impl.fetchTaxonomies;
 export const fetchTerms = impl.fetchTerms;
+export const fetchAllTerms = impl.fetchAllTerms;
 export const resolveTerms = impl.resolveTerms;
+export const createTerm = impl.createTerm;

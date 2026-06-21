@@ -7,6 +7,7 @@ import {
   parsePostTypeSlug,
   parseRelation,
   parseSinglePostSave,
+  parseTermCreate,
 } from './updates';
 
 describe('parseBatchUpdates', () => {
@@ -240,6 +241,41 @@ describe('parseSinglePostSave', () => {
   it('rejects a markdown value that is neither a string nor null', () => {
     expect(parseSinglePostSave({ content: '<p>x</p>', markdown: 5 })).toBeNull();
     expect(parseSinglePostSave({ content: '<p>x</p>', markdown: {} })).toBeNull();
+  });
+});
+
+describe('parseTermCreate', () => {
+  it('parses a flat term (name only)', () => {
+    expect(parseTermCreate({ taxonomy: 'categories', name: 'News' })).toEqual({
+      taxonomy: 'categories',
+      name: 'News',
+    });
+  });
+
+  it('trims the name and parses a parent for a hierarchical term', () => {
+    expect(parseTermCreate({ taxonomy: 'categories', name: '  Trade  ', parent: 5 })).toEqual({
+      taxonomy: 'categories',
+      name: 'Trade',
+      parent: 5,
+    });
+  });
+
+  it('treats parent 0 as top-level (omitted)', () => {
+    expect(parseTermCreate({ taxonomy: 'categories', name: 'X', parent: 0 })).toEqual({
+      taxonomy: 'categories',
+      name: 'X',
+    });
+  });
+
+  it('rejects a bad taxonomy, empty name, or invalid parent', () => {
+    expect(parseTermCreate({ taxonomy: 'bad base', name: 'X' })).toBeNull();
+    expect(parseTermCreate({ taxonomy: 'a/b', name: 'X' })).toBeNull();
+    expect(parseTermCreate({ taxonomy: 'categories', name: '   ' })).toBeNull();
+    expect(parseTermCreate({ taxonomy: 'categories', name: 5 })).toBeNull();
+    expect(parseTermCreate({ name: 'X' })).toBeNull();
+    expect(parseTermCreate({ taxonomy: 'categories', name: 'X', parent: -1 })).toBeNull();
+    expect(parseTermCreate({ taxonomy: 'categories', name: 'X', parent: 1.5 })).toBeNull();
+    expect(parseTermCreate(null)).toBeNull();
   });
 });
 

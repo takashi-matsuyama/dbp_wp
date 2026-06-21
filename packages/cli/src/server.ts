@@ -14,6 +14,7 @@ import {
   parsePostTypeSlug,
   parseRelation,
   parseSinglePostSave,
+  parseTermCreate,
 } from './updates';
 
 const MIME: Record<string, string> = {
@@ -910,8 +911,56 @@ async function handleTaxonomies(
 }
 
 /**
- * List or resolve taxonomy terms. `?taxonomy=<restBase>` is required; `?include=<ids>` resolves
- * specific term ids (to label the grid), otherwise it lists/searches/pages. Core REST — no plugin.
+ * Create a new taxonomy term (`POST /api/terms` with `{ taxonomy, name, parent? }`). Core REST;
+ * WordPress enforces the caller's term-management capability (a 403 is surfaced as such).
+ */
+async function handleTermCreate(
+  req: IncomingMessage,
+  res: ServerResponse,
+  options: ServerOptions,
+): Promise<void> {
+  if (!isJsonContentType(req.headers['content-type'])) {
+    sendJson(res, 415, { error: 'Content-Type must be application/json.' });
+    return;
+  }
+  const credentials = options.state.credentials;
+  if (!credentials) {
+    sendJson(res, 409, { error: 'Not connected' });
+    return;
+  }
+  let body: unknown;
+  try {
+    body = await readJsonBody(req);
+  } catch (e) {
+    sendJson(res, 400, { error: e instanceof Error ? e.message : 'Invalid request body' });
+    return;
+  }
+  const request = parseTermCreate(body);
+  if (!request) {
+    sendJson(res, 400, { error: 'Invalid term payload.' });
+    return;
+  }
+  try {
+    const term = await new WpClient(credentials).createTerm(
+      request.taxonomy,
+      request.parent !== undefined ? { name: request.name, parent: request.parent } : { name: request.name },
+    );
+    sendJson(res, 200, { term });
+  } catch (e) {
+    if (!res.headersSent) {
+      if (e instanceof WpRequestError && e.status === 403) {
+        sendJson(res, 403, { error: 'You do not have permission to create terms in this taxonomy.' });
+      } else {
+        sendJson(res, 502, { error: e instanceof Error ? e.message : 'Term creation failed' });
+      }
+    }
+  }
+}
+
+/**
+ * GET: list or resolve taxonomy terms. `?taxonomy=<restBase>` is required; `?include=<ids>`
+ * resolves specific ids (to label the grid), `?all=1` fetches every term (for a hierarchy tree),
+ * otherwise it lists/searches/pages. POST: create a term. Core REST — no companion plugin.
  */
 async function handleTerms(
   req: IncomingMessage,
@@ -919,6 +968,10 @@ async function handleTerms(
   url: URL,
   options: ServerOptions,
 ): Promise<void> {
+  if (req.method === 'POST') {
+    await handleTermCreate(req, res, options);
+    return;
+  }
   if (req.method !== 'GET') {
     sendJson(res, 405, { error: 'Method not allowed' });
     return;
@@ -944,9 +997,16 @@ async function handleTerms(
       sendJson(res, 200, { items: await client.resolveTerms(taxonomy, ids) });
       return;
     }
+    const search = url.searchParams.get('search') ?? undefined;
+    if (url.searchParams.get('all') === '1') {
+      // Every term, for building a complete hierarchy tree client-side (`truncated` warns when
+      // the page cap stopped short of a very large taxonomy).
+      const all = await client.listAllTerms(taxonomy, search ? { search } : {});
+      sendJson(res, 200, { items: all.items, truncated: all.truncated });
+      return;
+    }
     const pageRaw = url.searchParams.get('page');
     const page = pageRaw ? Number.parseInt(pageRaw, 10) : undefined;
-    const search = url.searchParams.get('search') ?? undefined;
     const result = await client.listTerms(taxonomy, {
       ...(page && page > 0 ? { page } : {}),
       ...(search ? { search } : {}),

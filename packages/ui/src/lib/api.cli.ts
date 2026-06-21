@@ -369,6 +369,40 @@ export async function fetchTerms(
   };
 }
 
+/** Fetch every term of a taxonomy (`?all=1`), for building a hierarchy tree client-side. */
+export async function fetchAllTerms(
+  taxonomy: string,
+  query: { search?: string } = {},
+): Promise<{ items: WpTerm[]; truncated: boolean }> {
+  const params = new URLSearchParams({ taxonomy, all: '1' });
+  if (query.search && query.search.trim() !== '') {
+    params.set('search', query.search.trim());
+  }
+  const res = await fetch(`/api/terms?${params.toString()}`);
+  if (!res.ok) {
+    throw new Error(`Failed to load terms: ${res.status}`);
+  }
+  const data = (await res.json()) as { items?: WpTerm[]; truncated?: boolean };
+  return { items: Array.isArray(data.items) ? data.items : [], truncated: data.truncated === true };
+}
+
+/** Create a new taxonomy term, optionally under a parent (hierarchical taxonomies). */
+export async function createTerm(
+  taxonomy: string,
+  input: { name: string; parent?: number },
+): Promise<WpTerm> {
+  const res = await fetch('/api/terms', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ taxonomy, ...input }),
+  });
+  const data = (await res.json().catch(() => ({}))) as { term?: WpTerm; error?: string };
+  if (!res.ok) {
+    throw new Error(data.error ?? `Create term failed: ${res.status}`);
+  }
+  return data.term as WpTerm;
+}
+
 /** Resolve specific term ids to their names (to label the taxonomy columns in the grid). */
 export async function resolveTerms(taxonomy: string, ids: number[]): Promise<WpTerm[]> {
   if (ids.length === 0) {
