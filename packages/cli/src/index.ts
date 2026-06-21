@@ -1,8 +1,10 @@
 import { existsSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
+import type { WpCredentials } from '@dbp-wp/core';
 import { readCredentials, readPort } from './config';
-import { createCredentialsStore } from './credentials-store';
+import { createCredentialsStore, type CredentialsStore } from './credentials-store';
+import { runMcpServer } from './mcp';
 import { openBrowser } from './open-browser';
 import { createDbpServer, type ConnectionState } from './server';
 
@@ -24,16 +26,34 @@ function resolveUiDir(): string | null {
   return null;
 }
 
-async function main(): Promise<void> {
-  // Credentials live in memory only at runtime. The env vars seed an initial connection;
-  // failing that, an opt-in saved connection is restored from OS secure storage (macOS only).
-  const store = createCredentialsStore();
+/**
+ * Resolve the runtime connection: env vars seed it; failing that, an opt-in saved connection
+ * is restored from OS secure storage (macOS only). Credentials live in memory only.
+ */
+async function bootstrapCredentials(
+  store: CredentialsStore,
+): Promise<{ credentials: WpCredentials | null; restored: boolean }> {
   let credentials = readCredentials();
   let restored = false;
   if (!credentials) {
     credentials = await store.load();
     restored = credentials !== null;
   }
+  return { credentials, restored };
+}
+
+async function main(): Promise<void> {
+  const store = createCredentialsStore();
+
+  // `dbp-wp mcp`: run the stdio MCP server instead of the local web app. Credentials come from
+  // the same env/secure-storage seed; nothing is written to stdout except protocol messages.
+  if (process.argv[2] === 'mcp') {
+    const { credentials } = await bootstrapCredentials(store);
+    await runMcpServer({ credentials, store });
+    return;
+  }
+
+  const { credentials, restored } = await bootstrapCredentials(store);
   const state: ConnectionState = { credentials, connectorAvailable: null };
   const port = readPort();
   const uiDir = resolveUiDir();
