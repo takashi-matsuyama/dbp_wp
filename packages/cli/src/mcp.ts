@@ -398,7 +398,7 @@ export async function runMcpServer(options: {
         // falling back to a known one when the client omits it.
         protocolVersion: requested ?? FALLBACK_PROTOCOL_VERSION,
         capabilities: { tools: {} },
-        serverInfo: { name: 'dbp-wp', version: '0.2.7' },
+        serverInfo: { name: 'dbp-wp', version: '0.2.8' },
       });
       return;
     }
