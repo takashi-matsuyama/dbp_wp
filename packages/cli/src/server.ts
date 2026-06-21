@@ -562,15 +562,8 @@ async function handleRelation(
 
   // Relation meta is registered by the companion plugin; without it WordPress silently
   // ignores the keys, so a write would falsely look successful. Require the connector and
-  // surface a clear 409. Probe lazily for connections that were never probed (env-seeded).
-  if (options.state.connectorAvailable === null) {
-    try {
-      options.state.connectorAvailable = await new WpClient(credentials).detectConnector();
-    } catch {
-      options.state.connectorAvailable = false;
-    }
-  }
-  if (!options.state.connectorAvailable) {
+  // surface a clear 409 (probing lazily for connections that were never probed).
+  if (!(await ensureConnectorAvailable(options, credentials))) {
     sendJson(res, 409, {
       error: 'The companion plugin is required to edit relations, but it was not found on the site.',
     });
@@ -609,9 +602,13 @@ async function handleRelation(
 }
 
 /**
- * Lazily detect and cache whether the companion plugin is active, returning the result.
- * Gates operations that write protected meta (which WordPress silently ignores without the
- * connector). A transient probe failure caches restricted mode until the next reconnect.
+ * Lazily detect and cache whether the companion plugin is active, returning the result. Gates
+ * operations that write protected meta (which WordPress silently ignores without the connector).
+ *
+ * A definitive probe (REST index reachable) is cached. A transient probe FAILURE is NOT cached:
+ * a network blip would otherwise pin restricted mode until the next reconnect, falsely rejecting
+ * connector writes. The state is left unknown so the next request re-probes; the connector is
+ * treated as unavailable for this request only.
  */
 async function ensureConnectorAvailable(
   options: ServerOptions,
@@ -621,7 +618,7 @@ async function ensureConnectorAvailable(
     try {
       options.state.connectorAvailable = await new WpClient(credentials).detectConnector();
     } catch {
-      options.state.connectorAvailable = false;
+      return false;
     }
   }
   return options.state.connectorAvailable;
@@ -762,16 +759,12 @@ async function handleConnection(
 ): Promise<void> {
   if (req.method === 'GET') {
     const c = options.state.credentials;
-    // Lazily detect the connector for connections that were never probed (e.g. seeded
-    // from env vars or restored from secure storage), caching the result so we only hit the
-    // REST index once. Concurrent first requests may probe more than once (benign; detection
-    // is deterministic), and a transient probe failure caches restricted mode until reconnect.
-    if (c && options.state.connectorAvailable === null) {
-      try {
-        options.state.connectorAvailable = await new WpClient(c).detectConnector();
-      } catch {
-        options.state.connectorAvailable = false;
-      }
+    // Lazily detect the connector for connections that were never probed (e.g. seeded from env
+    // vars or restored from secure storage), caching a definitive result so we hit the REST index
+    // once. Concurrent first requests may probe more than once (benign; detection is
+    // deterministic); a transient probe failure stays unknown and is re-probed next time.
+    if (c) {
+      await ensureConnectorAvailable(options, c);
     }
     const saved = await options.store.peek();
     sendJson(res, 200, {
@@ -854,12 +847,11 @@ async function handleConnection(
       return;
     }
     options.state.credentials = credentials;
-    // Detect the companion plugin; absence is not a connection failure (restricted mode).
-    try {
-      options.state.connectorAvailable = await client.detectConnector();
-    } catch {
-      options.state.connectorAvailable = false;
-    }
+    // Detect the companion plugin; absence is not a connection failure (restricted mode). Reset
+    // first so a fresh connection re-probes, and let a transient probe failure stay unknown
+    // (re-probed on the next request) rather than pinning restricted mode.
+    options.state.connectorAvailable = null;
+    const connectorAvailable = await ensureConnectorAvailable(options, credentials);
     // Optionally persist to OS secure storage. Saving is best-effort: a save failure does not
     // fail the (already successful) connection — the UI learns the outcome from `persisted`.
     // A connection made *from* saved credentials is already persisted; don't re-save.
@@ -875,7 +867,7 @@ async function handleConnection(
     sendJson(res, 200, {
       connected: true,
       siteUrl: credentials.siteUrl,
-      connectorAvailable: options.state.connectorAvailable,
+      connectorAvailable,
       canPersist: options.store.isAvailable(),
       persisted,
       savedSiteUrl: persisted ? credentials.siteUrl : null,

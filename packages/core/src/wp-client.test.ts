@@ -7,11 +7,13 @@ import {
   buildPostBody,
   buildUpdateBody,
   hasConnectorNamespace,
+  isPrivateAddress,
   normalizeMedia,
   normalizePost,
   normalizePostForEdit,
   normalizePostTypes,
   normalizeSiteUrl,
+  parseDeleteMetaResponse,
   sanitizeMetaKeys,
 } from './wp-client';
 import type { WpPostResponse } from './types';
@@ -64,6 +66,105 @@ describe('normalizeSiteUrl', () => {
     expect(() => normalizeSiteUrl('https://user:pw@example.com')).toThrow();
     expect(() => normalizeSiteUrl('https://example.com/?a=1')).toThrow();
     expect(() => normalizeSiteUrl('https://example.com/#x')).toThrow();
+  });
+
+  it('rejects private, loopback, and link-local IP literals (SSRF defense)', () => {
+    expect(() => normalizeSiteUrl('https://10.0.0.5')).toThrow();
+    expect(() => normalizeSiteUrl('https://192.168.1.1')).toThrow();
+    expect(() => normalizeSiteUrl('https://172.16.0.1')).toThrow();
+    expect(() => normalizeSiteUrl('https://169.254.169.254')).toThrow(); // cloud metadata
+    expect(() => normalizeSiteUrl('https://127.0.0.2')).toThrow();
+    expect(() => normalizeSiteUrl('https://[fe80::1]')).toThrow();
+    expect(() => normalizeSiteUrl('https://[fc00::1]')).toThrow();
+  });
+
+  it('rejects IPv4-mapped IPv6 literals (the URL parser canonicalizes them to hex)', () => {
+    // new URL('https://[::ffff:127.0.0.1]').hostname === '[::ffff:7f00:1]'
+    expect(() => normalizeSiteUrl('https://[::ffff:127.0.0.1]')).toThrow();
+    expect(() => normalizeSiteUrl('https://[::ffff:10.0.0.1]')).toThrow();
+    expect(() => normalizeSiteUrl('https://[::ffff:192.168.1.1]')).toThrow();
+  });
+
+  it('still allows the local-dev hosts and public sites', () => {
+    expect(normalizeSiteUrl('http://localhost:8080')).toBe('http://localhost:8080');
+    expect(normalizeSiteUrl('https://127.0.0.1')).toBe('https://127.0.0.1');
+    expect(normalizeSiteUrl('https://[::1]')).toBe('https://[::1]');
+    expect(normalizeSiteUrl('https://example.com')).toBe('https://example.com');
+    expect(normalizeSiteUrl('https://172.15.0.1')).toBe('https://172.15.0.1'); // outside 172.16/12
+  });
+});
+
+describe('isPrivateAddress', () => {
+  it('flags private, loopback, link-local, and unspecified IPv4', () => {
+    for (const ip of ['10.1.2.3', '172.31.255.255', '192.168.0.1', '127.0.0.1', '169.254.169.254', '0.0.0.0']) {
+      expect(isPrivateAddress(ip)).toBe(true);
+    }
+  });
+
+  it('allows public IPv4 and addresses just outside private ranges', () => {
+    for (const ip of ['8.8.8.8', '1.1.1.1', '172.15.0.1', '172.32.0.1', '11.0.0.1']) {
+      expect(isPrivateAddress(ip)).toBe(false);
+    }
+  });
+
+  it('flags IPv6 loopback, ULA, link-local, and mapped private v4 (dotted and hex forms)', () => {
+    for (const ip of [
+      '::1',
+      '::',
+      'fc00::1',
+      'fd12::3',
+      'fe80::1',
+      'febf::1', // top of fe80::/10
+      '::ffff:10.0.0.1', // dotted mapped
+      '::ffff:7f00:1', // hex mapped 127.0.0.1 (the URL-canonical form)
+      '::ffff:a00:1', // hex mapped 10.0.0.1
+      '::ffff:c0a8:101', // hex mapped 192.168.1.1
+      '[fe80::1]', // bracketed (as a URL hostname arrives)
+    ]) {
+      expect(isPrivateAddress(ip)).toBe(true);
+    }
+  });
+
+  it('does not flag DNS hostnames, public IPv6, or mapped public v4', () => {
+    expect(isPrivateAddress('example.com')).toBe(false);
+    expect(isPrivateAddress('wordpress.example.org')).toBe(false);
+    expect(isPrivateAddress('2606:4700::1111')).toBe(false);
+    expect(isPrivateAddress('::ffff:808:808')).toBe(false); // mapped 8.8.8.8 (public)
+  });
+});
+
+describe('parseDeleteMetaResponse', () => {
+  it('uses the JSON deleted list and post_id', () => {
+    expect(parseDeleteMetaResponse('{"post_id":7,"deleted":["a","b"]}', 7, ['a', 'b', 'c'])).toEqual({
+      postId: 7,
+      deleted: ['a', 'b'],
+    });
+  });
+
+  it('tolerates an empty/204 body as success for the requested keys', () => {
+    expect(parseDeleteMetaResponse('', 7, ['a', 'b'])).toEqual({ postId: 7, deleted: ['a', 'b'] });
+    expect(parseDeleteMetaResponse('   ', 7, ['x'])).toEqual({ postId: 7, deleted: ['x'] });
+  });
+
+  it('tolerates a non-JSON 2xx body as success', () => {
+    expect(parseDeleteMetaResponse('OK', 5, ['k'])).toEqual({ postId: 5, deleted: ['k'] });
+  });
+
+  it('trusts the request id over a malformed post_id and filters non-strings', () => {
+    expect(parseDeleteMetaResponse('{"post_id":"x","deleted":["a",2,null]}', 9, ['a'])).toEqual({
+      postId: 9,
+      deleted: ['a'],
+    });
+  });
+
+  it('falls back to the request id for a non-positive or fractional post_id', () => {
+    expect(parseDeleteMetaResponse('{"post_id":0,"deleted":["a"]}', 9, ['a']).postId).toBe(9);
+    expect(parseDeleteMetaResponse('{"post_id":-3,"deleted":["a"]}', 9, ['a']).postId).toBe(9);
+    expect(parseDeleteMetaResponse('{"post_id":1.5,"deleted":["a"]}', 9, ['a']).postId).toBe(9);
+  });
+
+  it('returns no deleted keys when the JSON list is absent or malformed', () => {
+    expect(parseDeleteMetaResponse('{"post_id":3}', 3, ['a'])).toEqual({ postId: 3, deleted: [] });
   });
 });
 

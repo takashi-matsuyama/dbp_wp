@@ -60,6 +60,14 @@ export function normalizeSiteUrl(siteUrl: string): string {
   if (url.protocol !== 'https:' && !(url.protocol === 'http:' && isLocal)) {
     throw new Error(`Site URL must use https (http is allowed only for local hosts): ${siteUrl}`);
   }
+  // SSRF defense: the client sends the Application Password to whatever the site URL points to,
+  // so block private, loopback, and link-local IP-literal targets (e.g. 10.x, 192.168.x,
+  // 169.254.169.254 cloud metadata, IPv6 ULA/link-local). The explicit local-dev hosts stay
+  // allowed. This covers IP literals only — a hostname that resolves to a private address (DNS
+  // rebinding) is not caught here, as fetch does not expose the resolved address.
+  if (!isLocal && isPrivateAddress(url.hostname)) {
+    throw new Error(`Site URL must not point to a private or local network address: ${siteUrl}`);
+  }
   if (url.username !== '' || url.password !== '') {
     throw new Error('Site URL must not contain embedded credentials.');
   }
@@ -68,6 +76,121 @@ export function normalizeSiteUrl(siteUrl: string): string {
   }
 
   return `${url.origin}${url.pathname}`.replace(/\/+$/, '');
+}
+
+/**
+ * True when a URL hostname is an IP literal in a private, loopback, link-local, or unspecified
+ * range — the SSRF block list used by {@link normalizeSiteUrl}. Returns false for DNS hostnames
+ * (not resolved here) and for public IPs. Exported for unit testing.
+ */
+export function isPrivateAddress(hostname: string): boolean {
+  // IPv4 literal.
+  const v4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(hostname);
+  if (v4) {
+    const octets = [Number(v4[1]), Number(v4[2]), Number(v4[3]), Number(v4[4])];
+    if (octets.some((o) => o > 255)) {
+      return false; // not a valid IPv4 literal
+    }
+    return isPrivateV4(octets);
+  }
+  // IPv6 literal. A URL's hostname keeps the brackets (e.g. `[fe80::1]`), so strip them.
+  if (hostname.includes(':')) {
+    return isPrivateV6(hostname.toLowerCase().replace(/^\[/, '').replace(/\]$/, ''));
+  }
+  return false; // DNS hostname or non-literal: not blocked here
+}
+
+/** True for private, loopback, link-local, or unspecified IPv4 octets. */
+function isPrivateV4(octets: readonly number[]): boolean {
+  const [a, b] = octets;
+  return (
+    a === 0 || // "this" network
+    a === 10 || // private
+    a === 127 || // loopback
+    (a === 169 && b === 254) || // link-local (incl. 169.254.169.254 metadata)
+    (a === 172 && b !== undefined && b >= 16 && b <= 31) || // private
+    (a === 192 && b === 168) // private
+  );
+}
+
+/**
+ * Expand an IPv6 literal to its 8 16-bit groups, or null if unparseable. Handles `::`
+ * compression and an embedded dotted-quad tail (e.g. `::ffff:1.2.3.4`). The WHATWG URL parser
+ * canonicalizes an IPv4-mapped address to hex (`[::ffff:7f00:1]`), so the range check must work
+ * on the expanded groups rather than string-matching the dotted form.
+ */
+function expandV6(input: string): number[] | null {
+  let s = input;
+  // Convert a trailing dotted-quad to two hex groups.
+  const v4m = /^(.*:)(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(s);
+  if (v4m) {
+    const o = [Number(v4m[2]), Number(v4m[3]), Number(v4m[4]), Number(v4m[5])];
+    if (o.some((x) => x > 255)) {
+      return null;
+    }
+    s = `${v4m[1]}${(((o[0] as number) << 8) | (o[1] as number)).toString(16)}:${(((o[2] as number) << 8) | (o[3] as number)).toString(16)}`;
+  }
+  const halves = s.split('::');
+  if (halves.length > 2) {
+    return null;
+  }
+  const toGroups = (side: string): number[] | null => {
+    if (side === '') {
+      return [];
+    }
+    const out: number[] = [];
+    for (const part of side.split(':')) {
+      if (!/^[0-9a-f]{1,4}$/.test(part)) {
+        return null;
+      }
+      out.push(parseInt(part, 16));
+    }
+    return out;
+  };
+  const left = toGroups(halves[0] ?? '');
+  if (left === null) {
+    return null;
+  }
+  if (halves.length === 2) {
+    const right = toGroups(halves[1] ?? '');
+    if (right === null) {
+      return null;
+    }
+    const gap = 8 - left.length - right.length;
+    if (gap < 1) {
+      return null; // `::` must stand for at least one zero group
+    }
+    return [...left, ...new Array<number>(gap).fill(0), ...right];
+  }
+  return left.length === 8 ? left : null;
+}
+
+/** True for IPv6 loopback/unspecified, ULA (fc00::/7), link-local (fe80::/10), or a mapped private v4. */
+function isPrivateV6(addr: string): boolean {
+  const groups = expandV6((addr.split('%')[0] ?? '').trim()); // drop any zone id
+  if (groups === null) {
+    return false;
+  }
+  if (groups.every((g) => g === 0)) {
+    return true; // :: unspecified
+  }
+  if (groups.slice(0, 7).every((g) => g === 0) && groups[7] === 1) {
+    return true; // ::1 loopback
+  }
+  const first = groups[0] ?? 0;
+  if ((first & 0xfe00) === 0xfc00) {
+    return true; // ULA fc00::/7
+  }
+  if ((first & 0xffc0) === 0xfe80) {
+    return true; // link-local fe80::/10
+  }
+  // IPv4-mapped ::ffff:a.b.c.d
+  if (groups.slice(0, 5).every((g) => g === 0) && groups[5] === 0xffff) {
+    const g6 = groups[6] ?? 0;
+    const g7 = groups[7] ?? 0;
+    return isPrivateV4([(g6 >> 8) & 0xff, g6 & 0xff, (g7 >> 8) & 0xff, g7 & 0xff]);
+  }
+  return false;
 }
 
 /**
@@ -290,15 +413,13 @@ export class WpClient {
   async deletePostMeta(id: number, keys: string[]): Promise<DeleteMetaResult> {
     assertPostId(id);
     const cleanKeys = sanitizeMetaKeys(keys);
-    const raw = await this.request<{ post_id?: unknown; deleted?: string[] }>(
-      `/${CONNECTOR_NAMESPACE}/posts/${String(id)}/meta`,
-      { method: 'DELETE', body: JSON.stringify({ keys: cleanKeys }) },
-    );
-    // Trust our own request `id` over a malformed connector `post_id`.
-    return {
-      postId: typeof raw.post_id === 'number' ? raw.post_id : id,
-      deleted: Array.isArray(raw.deleted) ? raw.deleted : [],
-    };
+    // Use send() (not request()) so an empty/204 response from the connector does not throw in
+    // JSON.parse; parseDeleteMetaResponse tolerates it.
+    const response = await this.send(`/${CONNECTOR_NAMESPACE}/posts/${String(id)}/meta`, {
+      method: 'DELETE',
+      body: JSON.stringify({ keys: cleanKeys }),
+    });
+    return parseDeleteMetaResponse(await response.text(), id, cleanKeys);
   }
 
   /**
@@ -478,6 +599,39 @@ export function buildPostBody(
     Object.assign(body, buildMetaBody(meta));
   }
   return body;
+}
+
+/**
+ * Parse a per-post meta-delete response. `send()` already threw on a non-2xx status, so an empty
+ * body (e.g. a 204 from a backend that returns no content) or a non-JSON body means the delete
+ * succeeded — the requested keys are reported as deleted. A JSON body's `deleted` list (the keys
+ * actually present) takes precedence, and the request `id` is trusted over a malformed `post_id`.
+ */
+export function parseDeleteMetaResponse(
+  body: string,
+  id: number,
+  requestedKeys: string[],
+): DeleteMetaResult {
+  const text = body.trim();
+  if (text === '') {
+    return { postId: id, deleted: [...requestedKeys] };
+  }
+  let raw: { post_id?: unknown; deleted?: unknown };
+  try {
+    raw = JSON.parse(text) as { post_id?: unknown; deleted?: unknown };
+  } catch {
+    return { postId: id, deleted: [...requestedKeys] };
+  }
+  return {
+    // Trust the request `id` over a malformed `post_id` (0, negative, or fractional included).
+    postId:
+      typeof raw.post_id === 'number' && Number.isSafeInteger(raw.post_id) && raw.post_id > 0
+        ? raw.post_id
+        : id,
+    deleted: Array.isArray(raw.deleted)
+      ? raw.deleted.filter((k): k is string => typeof k === 'string')
+      : [],
+  };
 }
 
 /** Validate and clean a list of meta keys for deletion (non-empty strings only). */

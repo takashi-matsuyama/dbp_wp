@@ -149,11 +149,16 @@ describe('parseImportCreates', () => {
 });
 
 describe('parseMetaDelete', () => {
-  it('parses a valid id and keys, dropping empty/non-string entries', () => {
-    expect(parseMetaDelete({ id: 7, keys: ['price', '', 3, '_rel'] })).toEqual({
+  it('parses a valid id and all-string keys', () => {
+    expect(parseMetaDelete({ id: 7, keys: ['price', '_rel'] })).toEqual({
       id: 7,
       keys: ['price', '_rel'],
     });
+  });
+
+  it('rejects the whole request if any key is invalid (no silent dropping)', () => {
+    expect(parseMetaDelete({ id: 7, keys: ['price', ''] })).toBeNull();
+    expect(parseMetaDelete({ id: 7, keys: ['price', 3, '_rel'] })).toBeNull();
   });
 
   it('rejects a bad id, missing/empty keys, or non-object body', () => {

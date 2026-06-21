@@ -308,9 +308,9 @@ export interface MetaDelete {
 }
 
 /**
- * Validate a meta-delete payload from untrusted input. Returns null unless `id` is a
- * positive integer and `keys` is an array with at least one non-empty string
- * (non-string / empty entries are dropped).
+ * Validate a meta-delete payload from untrusted input. Returns null unless `id` is a positive
+ * integer and `keys` is a non-empty array of non-empty strings. Any non-string or empty key
+ * rejects the whole request (no silent dropping), matching the other batch parsers.
  */
 export function parseMetaDelete(body: unknown): MetaDelete | null {
   if (typeof body !== 'object' || body === null) {
@@ -320,16 +320,17 @@ export function parseMetaDelete(body: unknown): MetaDelete | null {
   if (typeof record.id !== 'number' || !Number.isSafeInteger(record.id) || record.id <= 0) {
     return null;
   }
-  if (!Array.isArray(record.keys)) {
+  if (!Array.isArray(record.keys) || record.keys.length === 0) {
     return null;
   }
-  const keys = record.keys.filter(
-    (key): key is string => typeof key === 'string' && key.length > 0,
-  );
-  if (keys.length === 0) {
-    return null;
+  // Reject the whole request if any key is invalid, rather than silently dropping it — matching
+  // the other batch parsers, which fail on any malformed item instead of partially proceeding.
+  for (const key of record.keys) {
+    if (typeof key !== 'string' || key.length === 0) {
+      return null;
+    }
   }
-  return { id: record.id, keys };
+  return { id: record.id, keys: record.keys as string[] };
 }
 
 /**
