@@ -13,6 +13,7 @@ import {
   parseMetaDelete,
   parsePostTypeSlug,
   parseRelation,
+  parseSinglePostSave,
 } from './updates';
 
 const MIME: Record<string, string> = {
@@ -31,6 +32,10 @@ const MAX_BODY_BYTES = 1_000_000;
 
 /** Upload bodies (binary media) get a larger, separate cap than JSON request bodies. */
 const MAX_MEDIA_BYTES = 25_000_000;
+
+/** Matches `/api/posts/<id>` (single-post editor), capturing the numeric id. Digits only,
+ *  so it never shadows `/api/posts/batch|import|meta` or the `/api/posts` listing. */
+const SINGLE_POST_PATH = /^\/api\/posts\/(\d+)$/;
 
 /** Mutable connection state, held in memory only (never written to disk). */
 export interface ConnectionState {
@@ -603,6 +608,152 @@ async function handleRelation(
   }
 }
 
+/**
+ * Lazily detect and cache whether the companion plugin is active, returning the result.
+ * Gates operations that write protected meta (which WordPress silently ignores without the
+ * connector). A transient probe failure caches restricted mode until the next reconnect.
+ */
+async function ensureConnectorAvailable(
+  options: ServerOptions,
+  credentials: WpCredentials,
+): Promise<boolean> {
+  if (options.state.connectorAvailable === null) {
+    try {
+      options.state.connectorAvailable = await new WpClient(credentials).detectConnector();
+    } catch {
+      options.state.connectorAvailable = false;
+    }
+  }
+  return options.state.connectorAvailable;
+}
+
+/**
+ * Fetch a single post for the body editor: the raw `content` HTML plus, when the connector
+ * registered it, the lossless Markdown source (`_dbp_wp_markdown`). The standard listing omits
+ * the body, so the editor uses this dedicated read. Core REST — no connector needed for the
+ * HTML body; the Markdown source simply does not come back in restricted mode (HTML-only).
+ */
+async function handleGetPostForEdit(
+  res: ServerResponse,
+  url: URL,
+  options: ServerOptions,
+  id: number,
+): Promise<void> {
+  const credentials = options.state.credentials;
+  if (!credentials) {
+    sendJson(res, 409, { error: 'Not connected' });
+    return;
+  }
+  const type = parsePostTypeSlug(url.searchParams.get('type') ?? undefined);
+  if (type === null) {
+    sendJson(res, 400, { error: 'Invalid post type.' });
+    return;
+  }
+  try {
+    const post = await new WpClient(credentials).getPostForEdit(id, type);
+    sendJson(res, 200, { post });
+  } catch (e) {
+    if (!res.headersSent) {
+      if (e instanceof WpRequestError && e.status === 404) {
+        sendJson(res, 404, { error: 'Post not found.' });
+      } else {
+        sendJson(res, 502, { error: e instanceof Error ? e.message : 'Upstream request failed' });
+      }
+    }
+  }
+}
+
+/**
+ * Save a single post's body: writes the `content` HTML and, in Markdown mode, the
+ * `_dbp_wp_markdown` source — both in one request. Writing or clearing the Markdown source
+ * touches a protected meta key and requires the companion plugin; a content-only (HTML) save
+ * does not. The post id comes from the URL; `type` and the body come from the JSON payload.
+ */
+async function handleSavePostBody(
+  req: IncomingMessage,
+  res: ServerResponse,
+  options: ServerOptions,
+  id: number,
+): Promise<void> {
+  if (!isJsonContentType(req.headers['content-type'])) {
+    sendJson(res, 415, { error: 'Content-Type must be application/json.' });
+    return;
+  }
+  const credentials = options.state.credentials;
+  if (!credentials) {
+    sendJson(res, 409, { error: 'Not connected' });
+    return;
+  }
+
+  let body: unknown;
+  try {
+    body = await readJsonBody(req);
+  } catch (e) {
+    sendJson(res, 400, { error: e instanceof Error ? e.message : 'Invalid request body' });
+    return;
+  }
+  const save = parseSinglePostSave(body);
+  if (!save) {
+    sendJson(res, 400, { error: 'Invalid post body payload.' });
+    return;
+  }
+  const type = parsePostTypeSlug((body as Record<string, unknown>).type);
+  if (type === null) {
+    sendJson(res, 400, { error: 'Invalid post type.' });
+    return;
+  }
+
+  // Setting or clearing the Markdown source writes a protected meta key, which only the
+  // companion plugin exposes; without it WordPress silently ignores the key, so a Markdown
+  // save would falsely look successful. A content-only (HTML) save needs no connector.
+  if (save.markdown !== undefined && !(await ensureConnectorAvailable(options, credentials))) {
+    sendJson(res, 409, {
+      error:
+        'The companion plugin is required to save in Markdown mode, but it was not found on the site.',
+    });
+    return;
+  }
+
+  try {
+    const post = await new WpClient(credentials).updatePostBody(id, type, {
+      content: save.content,
+      ...(save.markdown !== undefined ? { markdown: save.markdown } : {}),
+    });
+    sendJson(res, 200, { post });
+  } catch (e) {
+    if (!res.headersSent) {
+      if (e instanceof WpRequestError && e.status === 404) {
+        sendJson(res, 404, { error: 'Post not found.' });
+      } else {
+        sendJson(res, 502, { error: e instanceof Error ? e.message : 'Save failed' });
+      }
+    }
+  }
+}
+
+/** Dispatch `/api/posts/<id>`: GET fetches a post for body editing, POST saves its body. */
+async function handleSinglePost(
+  req: IncomingMessage,
+  res: ServerResponse,
+  url: URL,
+  options: ServerOptions,
+  id: number,
+): Promise<void> {
+  if (!Number.isSafeInteger(id) || id <= 0) {
+    sendJson(res, 400, { error: 'Invalid post id.' });
+    return;
+  }
+  if (req.method === 'GET') {
+    await handleGetPostForEdit(res, url, options, id);
+    return;
+  }
+  if (req.method === 'POST') {
+    await handleSavePostBody(req, res, options, id);
+    return;
+  }
+  sendJson(res, 405, { error: 'Method not allowed' });
+}
+
 async function handleConnection(
   req: IncomingMessage,
   res: ServerResponse,
@@ -775,6 +926,11 @@ async function handleApiRoutes(
   }
   if (url.pathname === '/api/media') {
     await handleMedia(req, res, url, options);
+    return;
+  }
+  const singlePost = SINGLE_POST_PATH.exec(url.pathname);
+  if (singlePost) {
+    await handleSinglePost(req, res, url, options, Number.parseInt(singlePost[1] ?? '', 10));
     return;
   }
   if (url.pathname === '/api/posts') {

@@ -1,4 +1,4 @@
-import type { PrintRecord, WpMedia, WpPost, WpPostType } from '@dbp-wp/core';
+import type { PrintRecord, WpMedia, WpPost, WpPostEdit, WpPostType } from '@dbp-wp/core';
 
 // Shared data types and the data-layer interface. Two implementations satisfy `ApiImpl`:
 // `api.cli.ts` (the real CLI-backed `/api` client) and `api.local.ts` (the browser demo's
@@ -82,6 +82,18 @@ export interface MetaDeletion {
   keys: string[];
 }
 
+/** A single-post body save from the editor (content HTML + optional Markdown source). */
+export interface PostBodyUpdate {
+  /** Post body HTML to write to `content` (`''` clears the body). */
+  content: string;
+  /**
+   * Markdown source: a string sets it (Markdown mode), `null` clears it (demoting a
+   * previously-Markdown post to HTML mode), and omitting it leaves the meta untouched
+   * (HTML-only post). Setting/clearing requires the companion plugin.
+   */
+  markdown?: string | null;
+}
+
 /** A page of media-library results, with the total page count for the picker's pager. */
 export interface MediaListResult {
   items: WpMedia[];
@@ -102,6 +114,10 @@ export interface ApiImpl {
   forget(): Promise<void>;
   fetchTypes(): Promise<WpPostType[]>;
   fetchPosts(query?: ListPostsQuery): Promise<PostsResponse>;
+  /** Fetch one post for body editing: the raw `content` plus the Markdown source (full mode). */
+  fetchPost(id: number, type: string): Promise<WpPostEdit>;
+  /** Save one post's body (content + optional Markdown source). Returns the persisted post. */
+  savePostBody(id: number, type: string, update: PostBodyUpdate): Promise<WpPostEdit>;
   savePosts(updates: PostUpdate[], type?: string): Promise<UpdateResult[]>;
   importPosts(creates: ImportCreateInput[], type?: string): Promise<ImportResult[]>;
   bulkDeleteMeta(deletes: MetaDeletion[]): Promise<UpdateResult[]>;

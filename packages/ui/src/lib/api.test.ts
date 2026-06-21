@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { listPostsPath, mediaListPath, printPostsPath } from './api.cli';
+import { listPostsPath, mediaListPath, printPostsPath, singlePostPath } from './api.cli';
 
 describe('listPostsPath', () => {
   it('returns the base path with no query', () => {
@@ -25,6 +25,17 @@ describe('printPostsPath', () => {
     expect(printPostsPath({ type: 'pages' })).toBe('/api/print/posts?type=pages');
     expect(printPostsPath({ page: 1 })).toBe('/api/print/posts');
     expect(printPostsPath({ type: 'posts', page: 2 })).toBe('/api/print/posts?type=posts&page=2');
+  });
+});
+
+describe('singlePostPath', () => {
+  it('builds the single-post path with no type', () => {
+    expect(singlePostPath(42)).toBe('/api/posts/42');
+  });
+
+  it('appends an encoded type when provided', () => {
+    expect(singlePostPath(42, 'pages')).toBe('/api/posts/42?type=pages');
+    expect(singlePostPath(7, 'my cpt')).toBe('/api/posts/7?type=my%20cpt');
   });
 });
 

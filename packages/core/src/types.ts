@@ -102,6 +102,35 @@ export interface UpdatePostFields {
    * companion plugin needed. Pass `0` to remove the post's featured image.
    */
   featuredMedia?: number;
+  /**
+   * Post body HTML (sent as the core REST `content` field). Written by the single-post
+   * body editor; an empty string clears the body. The standard listing/batch path never
+   * sets this. No companion plugin needed.
+   */
+  content?: string;
+}
+
+/**
+ * A single post fetched for body editing. Carries the raw post body (`content.raw`) and,
+ * when present, the lossless Markdown source from the `_dbp_wp_markdown` meta. The editor
+ * picks its mode from {@link WpPostEdit.markdown}: a non-empty value means Markdown mode
+ * (the source is editable and re-rendered to HTML), otherwise HTML mode (edit `content`
+ * directly). Distinct from the lean {@link WpPost}, which omits the body.
+ */
+export interface WpPostEdit {
+  id: number;
+  type: string;
+  status: string;
+  /** Editable title (the `raw` value when available, else `rendered`). */
+  title: string;
+  /** Raw post body HTML (`content.raw`); the HTML that the front end renders. */
+  content: string;
+  /**
+   * Lossless Markdown source from `_dbp_wp_markdown` (companion plugin). Present and
+   * non-empty only for posts last saved in Markdown mode; `undefined` for HTML-mode posts
+   * and in restricted mode (no connector). When present, `content` mirrors its rendered HTML.
+   */
+  markdown?: string;
 }
 
 /** A WordPress post type available for listing/editing over REST. */

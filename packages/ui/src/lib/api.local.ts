@@ -1,10 +1,11 @@
-import type { PrintRecord, WpMedia, WpPost, WpPostType } from '@dbp-wp/core';
+import type { PrintRecord, WpMedia, WpPost, WpPostEdit, WpPostType } from '@dbp-wp/core';
 import type {
   ConnectionStatus,
   ImportCreateInput,
   ImportResult,
   MediaListResult,
   MetaDeletion,
+  PostBodyUpdate,
   PostUpdate,
   PostsResponse,
   PrintRecordsResponse,
@@ -42,6 +43,8 @@ interface DemoRecord {
   tax: Record<string, string[]>;
   parent?: number;
   parentType?: string;
+  /** Lossless Markdown source (Markdown-mode posts only), mirroring `_dbp_wp_markdown`. */
+  markdown?: string;
 }
 
 /** An in-memory demo media item (shape-compatible with {@link WpMedia}). */
@@ -153,6 +156,21 @@ function toWpMedia(m: DemoMedia): WpMedia {
   return { ...m };
 }
 
+/** Build the body-editing model for a demo record (mode follows a non-empty Markdown source). */
+function toWpPostEdit(d: DemoRecord): WpPostEdit {
+  const edit: WpPostEdit = {
+    id: d.id,
+    type: d.type === REGION_TYPE ? 'region' : 'country',
+    status: d.status,
+    title: d.title,
+    content: d.content,
+  };
+  if (typeof d.markdown === 'string' && d.markdown !== '') {
+    edit.markdown = d.markdown;
+  }
+  return edit;
+}
+
 function toPrintRecord(d: DemoRecord): PrintRecord {
   return {
     id: d.id,
@@ -219,6 +237,33 @@ export function fetchTypes(): Promise<WpPostType[]> {
 
 export function fetchPosts(query?: { type?: string }): Promise<PostsResponse> {
   return Promise.resolve({ posts: byType(query?.type).map(toWpPost), unconfigured: false });
+}
+
+export function fetchPost(id: number, _type: string): Promise<WpPostEdit> {
+  const post = find(id);
+  if (!post) {
+    return Promise.reject(new Error('Not found in demo data'));
+  }
+  return Promise.resolve(toWpPostEdit(post));
+}
+
+export function savePostBody(
+  id: number,
+  _type: string,
+  update: PostBodyUpdate,
+): Promise<WpPostEdit> {
+  const post = find(id);
+  if (!post) {
+    return Promise.reject(new Error('Not found in demo data'));
+  }
+  post.content = update.content;
+  // A string sets the Markdown source; null clears it (HTML mode); undefined leaves it.
+  if (update.markdown === null) {
+    delete post.markdown;
+  } else if (update.markdown !== undefined) {
+    post.markdown = update.markdown;
+  }
+  return Promise.resolve(toWpPostEdit(post));
 }
 
 export function fetchPrintRecords(query?: { type?: string }): Promise<PrintRecordsResponse> {

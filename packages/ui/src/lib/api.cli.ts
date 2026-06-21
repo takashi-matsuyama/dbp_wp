@@ -6,12 +6,13 @@ import type {
   ListPostsQuery,
   MediaListResult,
   MetaDeletion,
+  PostBodyUpdate,
   PostUpdate,
   PostsResponse,
   PrintRecordsResponse,
   UpdateResult,
 } from './api.types';
-import type { WpMedia, WpPost, WpPostType } from '@dbp-wp/core';
+import type { WpMedia, WpPost, WpPostEdit, WpPostType } from '@dbp-wp/core';
 
 // The CLI-backed data layer. The UI talks only to the local CLI server (`/api/...`), never
 // to WordPress directly, so the browser never holds credentials and is not subject to
@@ -40,6 +41,43 @@ export async function fetchPosts(query: ListPostsQuery = {}): Promise<PostsRespo
     posts: Array.isArray(data.posts) ? data.posts : [],
     unconfigured: data.unconfigured === true,
   };
+}
+
+/** Build the local API path for a single post (`/api/posts/<id>`). Exported for unit testing. */
+export function singlePostPath(id: number, type?: string): string {
+  const base = `/api/posts/${String(id)}`;
+  return type ? `${base}?type=${encodeURIComponent(type)}` : base;
+}
+
+/** Fetch one post for the body editor: raw `content` plus the Markdown source (full mode only). */
+export async function fetchPost(id: number, type: string): Promise<WpPostEdit> {
+  const res = await fetch(singlePostPath(id, type));
+  const data = (await res.json().catch(() => ({}))) as { post?: WpPostEdit; error?: string };
+  if (!res.ok) {
+    throw new Error(data.error ?? `Failed to load post: ${res.status}`);
+  }
+  return data.post as WpPostEdit;
+}
+
+/**
+ * Save one post's body. Sends `content` and, when given, the Markdown source (`markdown`:
+ * a string to set, `null` to clear). The post id is in the path; `type` rides the body.
+ */
+export async function savePostBody(
+  id: number,
+  type: string,
+  update: PostBodyUpdate,
+): Promise<WpPostEdit> {
+  const res = await fetch(singlePostPath(id), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ type, ...update }),
+  });
+  const data = (await res.json().catch(() => ({}))) as { post?: WpPostEdit; error?: string };
+  if (!res.ok) {
+    throw new Error(data.error ?? `Save failed: ${res.status}`);
+  }
+  return data.post as WpPostEdit;
 }
 
 /** Build the local API path for listing Print Design records. Exported for unit testing. */

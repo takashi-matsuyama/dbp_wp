@@ -13,10 +13,20 @@
   import SpreadsheetView from './lib/views/SpreadsheetView.svelte';
   import ImportView from './lib/views/ImportView.svelte';
   import PrintView from './lib/views/PrintView.svelte';
+  import EditView from './lib/views/EditView.svelte';
 
   type Tab = 'table' | 'spreadsheet' | 'import' | 'print';
 
   let tab = $state<Tab>('table');
+  // The single post whose body is being edited (opened from the spreadsheet), or null. When
+  // set, the body editor takes over the main area regardless of the active tab.
+  let editing = $state<{ id: number; type: string } | null>(null);
+
+  /** Switch tabs, leaving the body editor if it was open. */
+  function selectTab(next: Tab): void {
+    tab = next;
+    editing = null;
+  }
   let connection = $state<ConnectionStatus>({
     connected: false,
     siteUrl: null,
@@ -76,6 +86,7 @@
   }
 
   async function onDisconnect(): Promise<void> {
+    editing = null;
     try {
       await disconnect();
     } catch (e) {
@@ -93,12 +104,21 @@
   <h1>DBP WP</h1>
   {#if connection.connected}
     <nav>
-      <button class:active={tab === 'table'} onclick={() => (tab = 'table')}>Table</button>
-      <button class:active={tab === 'spreadsheet'} onclick={() => (tab = 'spreadsheet')}>
+      <button class:active={tab === 'table' && !editing} onclick={() => selectTab('table')}
+        >Table</button
+      >
+      <button
+        class:active={tab === 'spreadsheet' && !editing}
+        onclick={() => selectTab('spreadsheet')}
+      >
         Spreadsheet
       </button>
-      <button class:active={tab === 'import'} onclick={() => (tab = 'import')}>Import</button>
-      <button class:active={tab === 'print'} onclick={() => (tab = 'print')}>Print</button>
+      <button class:active={tab === 'import' && !editing} onclick={() => selectTab('import')}
+        >Import</button
+      >
+      <button class:active={tab === 'print' && !editing} onclick={() => selectTab('print')}
+        >Print</button
+      >
     </nav>
     {#if postTypes.length > 0}
       <label class="type-select">
@@ -137,6 +157,18 @@
       persisted={connection.persisted}
       savedSiteUrl={connection.savedSiteUrl}
     />
+  {:else if editing}
+    {#key `${connection.siteUrl ?? ''}:${editing.type}:${editing.id}`}
+      <EditView
+        id={editing.id}
+        type={editing.type}
+        connectorAvailable={connection.connectorAvailable}
+        onclose={() => {
+          editing = null;
+          void refresh();
+        }}
+      />
+    {/key}
   {:else if tab === 'table'}
     <TableView {posts} />
   {:else if tab === 'spreadsheet'}
@@ -148,6 +180,7 @@
         connectorAvailable={connection.connectorAvailable}
         {postTypes}
         onsaved={refresh}
+        onEditBody={(post) => (editing = { id: post.id, type: selectedType })}
       />
     {/key}
   {:else if tab === 'import'}

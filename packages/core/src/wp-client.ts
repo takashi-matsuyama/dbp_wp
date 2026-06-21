@@ -14,6 +14,7 @@ import type {
   WpCredentials,
   WpMedia,
   WpPost,
+  WpPostEdit,
   WpPostResponse,
   WpPostType,
 } from './types';
@@ -27,6 +28,15 @@ const ROUTE_SEGMENT = /^[a-z0-9_-]+$/i;
 
 /** REST field added by the companion plugin to carry arbitrary post meta. */
 const META_FIELD = 'dbp_wp_meta';
+
+/**
+ * Meta key holding the lossless Markdown source for a post edited in Markdown mode. An
+ * underscore-prefixed (protected) key, so the companion plugin must register it with
+ * `register_post_meta` + an `edit_post` auth callback to expose it over REST — the generic
+ * `dbp_wp_meta` field excludes protected keys. Like the relation keys, it therefore rides
+ * the standard core `meta` field, not `dbp_wp_meta`.
+ */
+export const MARKDOWN_META_KEY = '_dbp_wp_markdown';
 
 /** REST namespace registered by the companion plugin. */
 const CONNECTOR_NAMESPACE = 'dbp-wp/v1';
@@ -229,6 +239,50 @@ export class WpClient {
   }
 
   /**
+   * Fetch a single post for body editing (edit context), returning the raw body
+   * (`content.raw`) and, when present, the lossless Markdown source from
+   * `_dbp_wp_markdown`. The standard listing ({@link WpClient.listPosts}) omits the body, so
+   * the editor uses this dedicated read. The Markdown source comes back via the standard
+   * `meta` field only when the connector registered the key; in restricted mode the post is
+   * HTML-only. Pass the REST route slug as `type`.
+   */
+  async getPostForEdit(id: number, type = 'posts'): Promise<WpPostEdit> {
+    assertPostId(id);
+    assertRouteSegment(type);
+    const raw = await this.request<WpPostResponse>(`/wp/v2/${type}/${String(id)}?context=edit`);
+    return normalizePostForEdit(raw);
+  }
+
+  /**
+   * Save a single post's body. Writes `content` (core REST) and, when `markdown` is given,
+   * the `_dbp_wp_markdown` source via the standard `meta` field (registered by the connector)
+   * — both in one request. Pass `markdown` as the source string for Markdown mode, `null` to
+   * clear it (HTML mode on a post previously saved as Markdown), or omit it for an HTML-only
+   * post. Writing/clearing `markdown` requires the connector; a content-only save does not.
+   * Returns the re-fetched edit model (edit context), so the caller sees the persisted mode.
+   */
+  async updatePostBody(
+    id: number,
+    type: string,
+    body: { content: string; markdown?: string | null },
+  ): Promise<WpPostEdit> {
+    assertPostId(id);
+    assertRouteSegment(type);
+    const reqBody = buildUpdateBody({ content: body.content });
+    if (body.markdown !== undefined) {
+      // Standard `meta` field (like the relation keys), not the connector's `dbp_wp_meta`:
+      // `_dbp_wp_markdown` is protected and is only writable through register_post_meta.
+      // `null` makes WordPress delete the key (no stale source left to mis-detect the mode).
+      reqBody.meta = { [MARKDOWN_META_KEY]: body.markdown };
+    }
+    const raw = await this.request<WpPostResponse>(`/wp/v2/${type}/${String(id)}?context=edit`, {
+      method: 'POST',
+      body: JSON.stringify(reqBody),
+    });
+    return normalizePostForEdit(raw);
+  }
+
+  /**
    * Delete named meta keys from a single post via the companion plugin's
    * `DELETE /dbp-wp/v1/posts/<id>/meta` route. This route is keyed by id only (the
    * post type is irrelevant). Requires the connector.
@@ -378,6 +432,10 @@ export function buildUpdateBody(fields: UpdatePostFields): Record<string, unknow
   if (fields.featuredMedia !== undefined) {
     // `0` is meaningful here (removes the featured image), so check for undefined, not falsy.
     body.featured_media = fields.featuredMedia;
+  }
+  if (fields.content !== undefined) {
+    // `''` is meaningful here (clears the body), so check for undefined, not falsy.
+    body.content = fields.content;
   }
   return body;
 }
@@ -576,4 +634,28 @@ export function normalizePost(raw: WpPostResponse): WpPost {
     post.parentType = rawParentType;
   }
   return post;
+}
+
+/**
+ * Normalize a raw post (edit context) into the body-editing model {@link WpPostEdit}.
+ *
+ * Reads `content.raw` for the body. Mode is determined by the Markdown source: only a
+ * *non-empty* `_dbp_wp_markdown` value marks Markdown mode. This mirrors the relation keys'
+ * value-based sentinel (a positive id means "set") and sidesteps the REST default for a
+ * registered string meta (an unset key can come back as `''`), so an HTML-mode post is never
+ * mistaken for an empty-bodied Markdown post.
+ */
+export function normalizePostForEdit(raw: WpPostResponse): WpPostEdit {
+  const edit: WpPostEdit = {
+    id: raw.id,
+    type: raw.type,
+    status: raw.status,
+    title: raw.title.raw ?? raw.title.rendered,
+    content: raw.content?.raw ?? '',
+  };
+  const markdown = raw.meta?.[MARKDOWN_META_KEY];
+  if (typeof markdown === 'string' && markdown !== '') {
+    edit.markdown = markdown;
+  }
+  return edit;
 }

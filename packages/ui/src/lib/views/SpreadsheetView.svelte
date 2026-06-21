@@ -22,6 +22,7 @@
     connectorAvailable,
     postTypes,
     onsaved,
+    onEditBody,
   }: {
     posts: WpPost[];
     type: string;
@@ -30,6 +31,8 @@
     connectorAvailable: boolean;
     postTypes: WpPostType[];
     onsaved: () => void | Promise<void>;
+    /** Open the single-post body editor for a row (Markdown/HTML). */
+    onEditBody: (post: WpPost) => void;
   } = $props();
 
   // Column settings persisted per (site, type) in localStorage. Loaded synchronously here so
@@ -859,7 +862,7 @@
           </th>
           {/each}
         {/if}
-        <th></th>
+        <th>Body</th>
       </tr>
     </thead>
     <tbody>
@@ -1001,6 +1004,11 @@
             {/each}
           {/if}
           <td class="row-status">
+            <button
+              class="rel-edit"
+              onclick={() => onEditBody(post)}
+              disabled={saving || deleteBusy || relBusy}>Edit body</button
+            >
             {#if rowErrors[post.id]}<span class="error">{rowErrors[post.id]}</span>{/if}
           </td>
           </tr>

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  MARKDOWN_META_KEY,
   buildAuthHeader,
   buildContentDisposition,
   buildMetaBody,
@@ -8,6 +9,7 @@ import {
   hasConnectorNamespace,
   normalizeMedia,
   normalizePost,
+  normalizePostForEdit,
   normalizePostTypes,
   normalizeSiteUrl,
   sanitizeMetaKeys,
@@ -82,6 +84,11 @@ describe('buildUpdateBody', () => {
   it('maps featuredMedia to featured_media, including 0 (which removes it)', () => {
     expect(buildUpdateBody({ featuredMedia: 42 })).toEqual({ featured_media: 42 });
     expect(buildUpdateBody({ featuredMedia: 0 })).toEqual({ featured_media: 0 });
+  });
+
+  it('maps content to the core content field, including an empty string (which clears it)', () => {
+    expect(buildUpdateBody({ content: '<p>Hi</p>' })).toEqual({ content: '<p>Hi</p>' });
+    expect(buildUpdateBody({ content: '' })).toEqual({ content: '' });
   });
 });
 
@@ -240,6 +247,62 @@ describe('normalizePost featured media', () => {
 
   it('leaves featuredMedia unset when the field is absent', () => {
     expect(normalizePost(raw()).featuredMedia).toBeUndefined();
+  });
+});
+
+describe('normalizePostForEdit', () => {
+  function raw(over: Partial<WpPostResponse> = {}): WpPostResponse {
+    return {
+      id: 9,
+      type: 'post',
+      status: 'draft',
+      title: { rendered: 'R', raw: 'Title 9' },
+      menu_order: 0,
+      meta: {},
+      content: { raw: '<p>Body</p>', rendered: '<p>Body</p>' },
+      ...over,
+    };
+  }
+
+  it('reads the raw body and the editable title (HTML mode by default)', () => {
+    const edit = normalizePostForEdit(raw());
+    expect(edit).toMatchObject({
+      id: 9,
+      type: 'post',
+      status: 'draft',
+      title: 'Title 9',
+      content: '<p>Body</p>',
+    });
+    expect(edit.markdown).toBeUndefined();
+  });
+
+  it('falls back to an empty body when content.raw is absent', () => {
+    const noContent: WpPostResponse = {
+      id: 9,
+      type: 'post',
+      status: 'draft',
+      title: { rendered: 'R', raw: 'Title 9' },
+      menu_order: 0,
+      meta: {},
+    };
+    expect(normalizePostForEdit(noContent).content).toBe('');
+    expect(normalizePostForEdit(raw({ content: { rendered: 'x' } })).content).toBe('');
+  });
+
+  it('enters Markdown mode when _dbp_wp_markdown is a non-empty string', () => {
+    const edit = normalizePostForEdit(raw({ meta: { [MARKDOWN_META_KEY]: '# Heading' } }));
+    expect(edit.markdown).toBe('# Heading');
+  });
+
+  it('stays in HTML mode for an empty or absent Markdown source (registered string default)', () => {
+    expect(normalizePostForEdit(raw({ meta: { [MARKDOWN_META_KEY]: '' } })).markdown).toBeUndefined();
+    expect(normalizePostForEdit(raw({ meta: {} })).markdown).toBeUndefined();
+  });
+
+  it('prefers the raw title and falls back to rendered', () => {
+    expect(normalizePostForEdit(raw({ title: { rendered: 'Only rendered' } })).title).toBe(
+      'Only rendered',
+    );
   });
 });
 

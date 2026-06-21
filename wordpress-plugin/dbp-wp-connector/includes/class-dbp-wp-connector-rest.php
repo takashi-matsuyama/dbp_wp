@@ -28,6 +28,10 @@ if ( ! defined( 'ABSPATH' ) ) {
  *   `_`-prefixed (protected), so this explicit registration — with an
  *   `auth_callback` that delegates to the same `edit_post` capability — is exactly
  *   the escape hatch the protected-meta note below describes.
+ * - A Markdown-source meta key (`_dbp_wp_markdown`) is registered the same way, so
+ *   the single-post body editor can store the lossless Markdown a post was written
+ *   in (the rendered HTML is mirrored into the core `content` field). It is also
+ *   `_`-prefixed (protected) and gated by the same `edit_post` capability.
  *
  * Protected/internal meta (keys for which `is_protected_meta()` is true — by
  * default `_`-prefixed keys such as `_edit_lock`, `_thumbnail_id`, `_wp_*`) is
@@ -72,6 +76,14 @@ class DBP_WP_Connector_REST {
 	const PARENT_TYPE_META = '_dbp_wp_parent_type';
 
 	/**
+	 * Meta key holding a post's lossless Markdown source (single source of truth for
+	 * Markdown-mode posts; the rendered HTML is mirrored into the core `content` field).
+	 *
+	 * @var string
+	 */
+	const MARKDOWN_META = '_dbp_wp_markdown';
+
+	/**
 	 * Hook the connector's registration callbacks onto `rest_api_init`.
 	 *
 	 * @return void
@@ -79,6 +91,7 @@ class DBP_WP_Connector_REST {
 	public function register() {
 		add_action( 'rest_api_init', array( $this, 'register_meta_field' ) );
 		add_action( 'rest_api_init', array( $this, 'register_relation_meta' ) );
+		add_action( 'rest_api_init', array( $this, 'register_markdown_meta' ) );
 		add_action( 'rest_api_init', array( $this, 'register_routes' ) );
 	}
 
@@ -150,11 +163,43 @@ class DBP_WP_Connector_REST {
 	}
 
 	/**
-	 * Authorize a read/write of a registered relation meta key.
+	 * Register the Markdown-source meta key on every REST-enabled post type.
+	 *
+	 * Like the relation keys, this `_`-prefixed (protected) key is registered with
+	 * `register_post_meta()` so the single-post body editor reads it from `meta._dbp_wp_markdown`
+	 * and writes it the same way (the generic `dbp_wp_meta` field excludes protected keys).
+	 * It is single-valued, exposed in REST, and gated by `edit_post` via the `auth_callback`.
+	 *
+	 * No `sanitize_callback` is set on purpose: the value is the lossless, multi-line Markdown
+	 * source, and any sanitizer here could mangle whitespace, newlines, or escapes. The source
+	 * is never emitted to a public page (the front end consumes the rendered `content`); the
+	 * rendered HTML written to `content` is what core `kses` sanitizes on save. Clearing the
+	 * source (switching a post back to HTML mode) is a standard REST meta delete (sending `null`).
+	 *
+	 * @return void
+	 */
+	public function register_markdown_meta() {
+		$post_types = get_post_types( array( 'show_in_rest' => true ), 'names' );
+		foreach ( $post_types as $post_type ) {
+			register_post_meta(
+				$post_type,
+				self::MARKDOWN_META,
+				array(
+					'single'        => true,
+					'show_in_rest'  => true,
+					'type'          => 'string',
+					'auth_callback' => array( $this, 'can_edit_post_meta' ),
+				)
+			);
+		}
+	}
+
+	/**
+	 * Authorize a read/write of a registered protected meta key (relation keys, Markdown source).
 	 *
 	 * Used as the `auth_callback` for `register_post_meta()`: it ignores the default
 	 * decision and delegates to the same `edit_post` capability the connector uses
-	 * everywhere else, so relation editing follows core's per-post permissions.
+	 * everywhere else, so editing these keys follows core's per-post permissions.
 	 *
 	 * @param bool   $allowed   Whether the key can be managed (ignored; we decide here).
 	 * @param string $meta_key  The meta key being checked (unused).

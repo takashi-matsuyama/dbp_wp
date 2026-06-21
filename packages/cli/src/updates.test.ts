@@ -6,6 +6,7 @@ import {
   parseMetaDelete,
   parsePostTypeSlug,
   parseRelation,
+  parseSinglePostSave,
 } from './updates';
 
 describe('parseBatchUpdates', () => {
@@ -185,6 +186,43 @@ describe('parseBulkMetaDelete', () => {
     expect(parseBulkMetaDelete({ deletes: 'x' })).toBeNull();
     expect(parseBulkMetaDelete({ deletes: [{ id: 1, keys: ['price'] }, { id: 0, keys: ['x'] }] })).toBeNull();
     expect(parseBulkMetaDelete(null)).toBeNull();
+  });
+});
+
+describe('parseSinglePostSave', () => {
+  it('parses an HTML-only save (content, no markdown — meta left untouched)', () => {
+    expect(parseSinglePostSave({ content: '<p>Hi</p>' })).toEqual({ content: '<p>Hi</p>' });
+  });
+
+  it('accepts an empty content string (clears the body)', () => {
+    expect(parseSinglePostSave({ content: '' })).toEqual({ content: '' });
+  });
+
+  it('parses a Markdown-mode save (content + markdown source)', () => {
+    expect(parseSinglePostSave({ content: '<h1>T</h1>', markdown: '# T' })).toEqual({
+      content: '<h1>T</h1>',
+      markdown: '# T',
+    });
+  });
+
+  it('parses a markdown clear (null) for demoting a post to HTML mode', () => {
+    expect(parseSinglePostSave({ content: '<p>x</p>', markdown: null })).toEqual({
+      content: '<p>x</p>',
+      markdown: null,
+    });
+  });
+
+  it('rejects a missing or non-string content', () => {
+    expect(parseSinglePostSave({ markdown: '# T' })).toBeNull();
+    expect(parseSinglePostSave({ content: 5 })).toBeNull();
+    expect(parseSinglePostSave({})).toBeNull();
+    expect(parseSinglePostSave(null)).toBeNull();
+    expect(parseSinglePostSave('x')).toBeNull();
+  });
+
+  it('rejects a markdown value that is neither a string nor null', () => {
+    expect(parseSinglePostSave({ content: '<p>x</p>', markdown: 5 })).toBeNull();
+    expect(parseSinglePostSave({ content: '<p>x</p>', markdown: {} })).toBeNull();
   });
 });
 

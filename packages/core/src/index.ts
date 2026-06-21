@@ -1,6 +1,7 @@
 export type {
   WpCredentials,
   WpPost,
+  WpPostEdit,
   WpPostResponse,
   WpPostType,
   WpMedia,
@@ -12,11 +13,14 @@ export type {
 export {
   WpClient,
   WpRequestError,
+  MARKDOWN_META_KEY,
   buildAuthHeader,
   normalizeSiteUrl,
   normalizeMedia,
+  normalizePostForEdit,
   buildContentDisposition,
 } from './wp-client';
+export { renderMarkdown } from './markdown';
 export { type FormulaEngine, SafeFormulaEngine } from './calc/index';
 export {
   type ParsedTable,

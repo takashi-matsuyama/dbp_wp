@@ -41,7 +41,8 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "expr-eval-fork": "^3.0.3"
+    "expr-eval-fork": "^3.0.3",
+    "marked": "^18.0.5"
   },
   "devDependencies": {
     "tsup": "^8.3.0"

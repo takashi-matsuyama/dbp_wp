@@ -265,6 +265,42 @@ export function parseRelation(body: unknown): RelationRequest | null {
   };
 }
 
+/** A validated single-post body save (content + optional Markdown source). */
+export interface SinglePostSave {
+  /** Post body HTML to write to the core `content` field (`''` clears the body). */
+  content: string;
+  /**
+   * Markdown source for `_dbp_wp_markdown`: a string sets it (Markdown mode), `null`
+   * clears it (HTML mode on a post previously saved as Markdown), and omitting it leaves
+   * the meta untouched (HTML-only post). Set/clear requires the companion plugin.
+   */
+  markdown?: string | null;
+}
+
+/**
+ * Validate a single-post body save payload (`{ content, markdown? }`) from untrusted input.
+ * `content` is required (a string; `''` is allowed and clears the body). `markdown`, when
+ * present, must be a string (set) or `null` (clear). Returns null on any malformed shape.
+ * The post `id` comes from the URL, and `type` is validated separately by the handler.
+ */
+export function parseSinglePostSave(body: unknown): SinglePostSave | null {
+  if (typeof body !== 'object' || body === null) {
+    return null;
+  }
+  const record = body as Record<string, unknown>;
+  if (typeof record.content !== 'string') {
+    return null;
+  }
+  const result: SinglePostSave = { content: record.content };
+  if (record.markdown !== undefined) {
+    if (record.markdown !== null && typeof record.markdown !== 'string') {
+      return null;
+    }
+    result.markdown = record.markdown;
+  }
+  return result;
+}
+
 /** A validated per-post meta-deletion request. */
 export interface MetaDelete {
   id: number;
