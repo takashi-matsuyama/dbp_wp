@@ -1,4 +1,5 @@
 import type {
+  MergeProgress,
   MergeTermResult,
   PrintRecord,
   WpMedia,
@@ -184,7 +185,13 @@ export interface ApiImpl {
   /**
    * Merge the source term into the target across every post type the taxonomy applies to, then
    * delete the source (only on a fully clean merge). The caller must block merging a term that has
-   * children. Core REST — no companion plugin. Returns the per-post outcome.
+   * children. `onProgress` reports live counts during the (potentially long) re-assignment, and
+   * `signal` cancels it (keeping the source). Core REST — no companion plugin.
    */
-  mergeTerm(taxonomy: string, fromId: number, toId: number): Promise<MergeTermResult>;
+  mergeTerm(
+    taxonomy: string,
+    fromId: number,
+    toId: number,
+    options?: { onProgress?: (progress: MergeProgress) => void; signal?: AbortSignal },
+  ): Promise<MergeTermResult>;
 }

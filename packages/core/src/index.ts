@@ -11,6 +11,8 @@ export type {
   ListPostsParams,
   ListMediaParams,
   ListTermsParams,
+  MergeProgress,
+  MergeTermOptions,
   MergeTermResult,
   UpdatePostFields,
   DeleteMetaResult,

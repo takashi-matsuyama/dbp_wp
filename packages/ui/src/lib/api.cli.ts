@@ -14,6 +14,7 @@ import type {
   UpdateResult,
 } from './api.types';
 import type {
+  MergeProgress,
   MergeTermResult,
   WpMedia,
   WpPost,
@@ -440,27 +441,78 @@ export async function deleteTerm(taxonomy: string, id: number): Promise<void> {
   }
 }
 
-/** Merge the source term into the target across the taxonomy's post types, then delete the source. */
+/**
+ * Merge the source term into the target across the taxonomy's post types, then delete the source.
+ * The server streams NDJSON: `{type:'progress'}` lines during re-assignment, then a final
+ * `{type:'result'}` or `{type:'error'}` line. `options.signal` aborts the fetch (canceling the
+ * merge server-side, which keeps the source); `options.onProgress` receives live counts.
+ */
 export async function mergeTerm(
   taxonomy: string,
   fromId: number,
   toId: number,
+  options: { onProgress?: (progress: MergeProgress) => void; signal?: AbortSignal } = {},
 ): Promise<MergeTermResult> {
   const res = await fetch(`/api/terms/${fromId}/merge?taxonomy=${encodeURIComponent(taxonomy)}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ into: toId }),
+    signal: options.signal ?? null,
   });
-  const data = (await res.json().catch(() => ({}))) as Partial<MergeTermResult> & { error?: string };
-  if (!res.ok) {
+  if (!res.ok || !res.body) {
+    // A pre-stream validation failure (4xx) returns a plain JSON error, not a stream.
+    const data = (await res.json().catch(() => ({}))) as { error?: string };
     throw new Error(data.error ?? `Merge term failed: ${res.status}`);
   }
-  return {
-    reassigned: typeof data.reassigned === 'number' ? data.reassigned : 0,
-    failed: Array.isArray(data.failed) ? data.failed : [],
-    deleted: data.deleted === true,
-    truncated: data.truncated === true,
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let result: MergeTermResult | null = null;
+  let errorMessage: string | null = null;
+
+  const handleLine = (line: string): void => {
+    const trimmed = line.trim();
+    if (trimmed === '') return;
+    const event = JSON.parse(trimmed) as Record<string, unknown>;
+    if (event.type === 'progress') {
+      options.onProgress?.({
+        reassigned: Number(event.reassigned) || 0,
+        failed: Number(event.failed) || 0,
+        total: Number(event.total) || 0,
+      });
+    } else if (event.type === 'result') {
+      result = {
+        reassigned: Number(event.reassigned) || 0,
+        failed: Array.isArray(event.failed) ? (event.failed as MergeTermResult['failed']) : [],
+        deleted: event.deleted === true,
+        truncated: event.truncated === true,
+        canceled: event.canceled === true,
+      };
+    } else if (event.type === 'error') {
+      errorMessage = typeof event.error === 'string' ? event.error : 'Term merge failed';
+    }
   };
+
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    let nl: number;
+    while ((nl = buffer.indexOf('\n')) >= 0) {
+      handleLine(buffer.slice(0, nl));
+      buffer = buffer.slice(nl + 1);
+    }
+  }
+  handleLine(buffer); // flush any trailing line without a newline
+
+  if (errorMessage !== null) {
+    throw new Error(errorMessage);
+  }
+  if (result === null) {
+    throw new Error('Merge ended without a result.');
+  }
+  return result;
 }
 
 /** Resolve specific term ids to their names (to label the taxonomy columns in the grid). */

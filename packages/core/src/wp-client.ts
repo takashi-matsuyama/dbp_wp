@@ -11,6 +11,7 @@ import type {
   ListMediaParams,
   ListPostsParams,
   ListTermsParams,
+  MergeTermOptions,
   MergeTermResult,
   UpdatePostFields,
   WpCredentials,
@@ -766,19 +767,30 @@ export class WpClient {
    * lose the term without gaining the target. So this scans all of the taxonomy's post types.
    *
    * The source is deleted only on a fully clean merge: every reachable type fully paged (no
-   * {@link MAX_MERGE_PAGES} cap hit, no type unaddressable over REST) and every re-assignment
-   * succeeded. Otherwise it is kept (`deleted: false`) so the caller can surface the partial
-   * result and re-run — re-running re-queries the source's remaining posts (idempotent-ish). The
-   * caller must reject merging a term that has children (WordPress would reparent them on delete);
-   * this method does not enforce that. A core REST call — no companion plugin needed.
+   * {@link MAX_MERGE_PAGES} cap hit, no type unaddressable over REST), every re-assignment
+   * succeeded, and the caller did not cancel. Otherwise it is kept (`deleted: false`) so the caller
+   * can surface the partial result and re-run — re-running re-queries the source's remaining posts
+   * (idempotent-ish). The caller must reject merging a term that has children (WordPress would
+   * reparent them on delete); this method does not enforce that.
+   *
+   * Because the re-assignment is one REST write per post (minutes for a heavily-used term),
+   * `options.onProgress` reports live counts and `options.signal` cancels cooperatively between
+   * writes (the in-flight write completes, then the merge stops and keeps the source). A core REST
+   * call — no companion plugin needed.
    */
-  async mergeTerm(taxRestBase: string, fromId: number, toId: number): Promise<MergeTermResult> {
+  async mergeTerm(
+    taxRestBase: string,
+    fromId: number,
+    toId: number,
+    options: MergeTermOptions = {},
+  ): Promise<MergeTermResult> {
     assertRouteSegment(taxRestBase);
     assertTermId(fromId);
     assertTermId(toId);
     if (fromId === toId) {
       throw new Error('Cannot merge a term into itself.');
     }
+    const { onProgress, signal } = options;
 
     // Resolve the REST bases of every post type this taxonomy applies to. A taxonomy type with no
     // REST-addressable post type cannot be re-assigned, so the merge cannot be guaranteed complete.
@@ -809,9 +821,16 @@ export class WpClient {
     // Phase A — snapshot every post carrying the source term, reading (not mutating) so forward
     // paging is stable. (Re-assigning shrinks the filtered set, which would shift pages mid-scan.)
     const targets: { type: string; post: WpPost }[] = [];
+    let canceled = false;
     for (const type of restBases) {
+      if (canceled) break;
       let page = 1;
       for (;;) {
+        if (signal?.aborted) {
+          // Cancel during discovery: stop scanning, run no re-assignment, keep the source.
+          canceled = true;
+          break;
+        }
         if (page > MAX_MERGE_PAGES) {
           // Too many pages to enumerate safely: keep the source rather than delete with stragglers.
           truncated = true;
@@ -836,27 +855,45 @@ export class WpClient {
       }
     }
 
-    // Phase B — re-assign each snapshotted post from the source term to the target.
+    // Phase B — re-assign each snapshotted post from the source term to the target. Report the
+    // total up front (count known) so a caller can render a determinate progress bar.
     let reassigned = 0;
     const failed: { id: number; error: string }[] = [];
-    for (const { type, post } of targets) {
-      const current = post.terms[taxRestBase] ?? [];
-      const next = computeMergedTermIds(current, fromId, toId);
-      try {
-        await this.updatePost(post.id, { terms: { [taxRestBase]: next } }, type);
-        reassigned += 1;
-      } catch (e) {
-        failed.push({ id: post.id, error: e instanceof Error ? e.message : String(e) });
+    // Skip re-assignment entirely if discovery was canceled (no misleading progress on a partial
+    // discovery count — `total` is only meaningful once discovery completed).
+    if (!canceled) {
+      onProgress?.({ reassigned, failed: failed.length, total: targets.length });
+      for (const { type, post } of targets) {
+        // Cancel cooperatively between writes: stop and keep the source (it can be re-run later).
+        if (signal?.aborted) {
+          canceled = true;
+          break;
+        }
+        const current = post.terms[taxRestBase] ?? [];
+        const next = computeMergedTermIds(current, fromId, toId);
+        try {
+          await this.updatePost(post.id, { terms: { [taxRestBase]: next } }, type);
+          reassigned += 1;
+        } catch (e) {
+          failed.push({ id: post.id, error: e instanceof Error ? e.message : String(e) });
+        }
+        onProgress?.({ reassigned, failed: failed.length, total: targets.length });
       }
     }
 
-    // Delete the source only when the merge is provably complete and clean.
+    // Re-check after the loop: a cancel that arrived during or after the final re-assignment must
+    // still keep the source (the per-iteration check above can't catch a late abort).
+    if (signal?.aborted) {
+      canceled = true;
+    }
+
+    // Delete the source only when the merge is provably complete and clean (and not canceled).
     let deleted = false;
-    if (failed.length === 0 && !truncated) {
+    if (failed.length === 0 && !truncated && !canceled) {
       await this.deleteTerm(taxRestBase, fromId);
       deleted = true;
     }
-    return { reassigned, failed, deleted, truncated };
+    return { reassigned, failed, deleted, truncated, canceled };
   }
 
   /**

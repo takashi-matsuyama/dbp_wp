@@ -200,8 +200,8 @@ export interface ListTermsParams {
 /**
  * Outcome of a term merge ({@link WpClient.mergeTerm}). The source term is deleted only when the
  * merge completed fully: every assignment across every reachable post type was re-assigned to the
- * target, with no per-post failure and no page-cap truncation. Otherwise the source is kept so the
- * caller can surface the partial result and re-run.
+ * target, with no per-post failure, no page-cap truncation, and no cancellation. Otherwise the
+ * source is kept so the caller can surface the partial result and re-run.
  */
 export interface MergeTermResult {
   /** Posts successfully re-assigned from the source term to the target. */
@@ -215,6 +215,29 @@ export interface MergeTermResult {
    * taxonomy is attached to a post type not addressable over REST. The source is kept.
    */
   truncated: boolean;
+  /** True when the caller aborted the merge (via the `signal`) before it finished; source kept. */
+  canceled: boolean;
+}
+
+/**
+ * Progress of an in-flight term merge ({@link WpClient.mergeTerm}), reported via `onProgress` so a
+ * long re-assignment (one REST write per post) can show a live count rather than freezing the UI.
+ */
+export interface MergeProgress {
+  /** Posts re-assigned to the target so far. */
+  reassigned: number;
+  /** Posts that failed to re-assign so far. */
+  failed: number;
+  /** Total posts discovered carrying the source term (known once discovery completes). */
+  total: number;
+}
+
+/** Options for {@link WpClient.mergeTerm}: live progress and cooperative cancellation. */
+export interface MergeTermOptions {
+  /** Called after discovery and after each re-assignment with cumulative counts. */
+  onProgress?: (progress: MergeProgress) => void;
+  /** Aborts the merge between re-assignments; the source term is kept (`canceled: true`). */
+  signal?: AbortSignal;
 }
 
 /** Result of a per-post meta delete via the companion plugin. */

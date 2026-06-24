@@ -30,8 +30,11 @@
   let deletingId = $state<number | null>(null);
   let mergingId = $state<number | null>(null);
   let mergeTarget = $state(0);
-  // Lingering note when a merge could not delete the source (partial failure or truncation).
+  // Lingering note when a merge could not delete the source (partial failure, truncation, cancel).
   let mergeNote = $state<string | null>(null);
+  // Live progress while a merge runs (null when idle); paired with an AbortController for Cancel.
+  let mergeProgress = $state<{ reassigned: number; failed: number; total: number } | null>(null);
+  let mergeAbort = $state<AbortController | null>(null);
 
   const rows = $derived(flattenTermTree(terms, filter));
   // The full tree, ignoring the filter — used to populate the merge target list so a typed filter
@@ -98,6 +101,7 @@
     editingId = null;
     deletingId = null;
     mergingId = null;
+    mergeProgress = null;
   }
 
   /** Whether a term has child terms — a merge is blocked for those (WordPress would reparent the
@@ -195,24 +199,45 @@
     error = null;
     mergeNote = null;
     const name = t.name;
+    const controller = new AbortController();
+    mergeAbort = controller;
+    mergeProgress = { reassigned: 0, failed: 0, total: 0 };
     let caught: string | null = null;
+    let canceledByUser = false;
     let result: Awaited<ReturnType<typeof mergeTerm>> | null = null;
     try {
-      result = await mergeTerm(selectedTax, t.id, mergeTarget);
+      result = await mergeTerm(selectedTax, t.id, mergeTarget, {
+        signal: controller.signal,
+        onProgress: (p) => (mergeProgress = p),
+      });
       mergingId = null;
     } catch (e) {
-      caught = msg(e);
+      // A user Cancel aborts the fetch — surface that as a cancellation, not an error.
+      if (controller.signal.aborted) canceledByUser = true;
+      else caught = msg(e);
     }
-    // Re-assignments may have already happened even when the call threw (e.g. the source delete
-    // failed after every post was moved). Always refresh so the term list and the app's post cache
-    // reflect reality, then report the outcome (loadTerms clears `error`, so set it afterwards).
+    const lastReassigned = result?.reassigned ?? mergeProgress?.reassigned ?? 0;
+    mergeAbort = null;
+    mergeProgress = null;
+    // Re-assignments may have already happened even when the call threw or was canceled. Always
+    // refresh so the term list and the app's post cache reflect reality, then report the outcome
+    // (loadTerms clears `error`, so set it afterwards).
     try {
       await loadTerms();
     } catch {
       /* a load failure is surfaced below by `caught` if present, else the next reload */
     }
     onchanged?.();
-    if (caught) {
+    if (result?.canceled) {
+      // The data layer confirmed it stopped and kept the source (e.g. the demo's cooperative abort).
+      mergingId = null;
+      mergeNote = `Merge canceled — re-assigned ${result.reassigned} post(s); "${name}" was kept.`;
+    } else if (canceledByUser) {
+      // The fetch was aborted before a final result arrived, so the exact server state is unknown;
+      // the refreshed list above reflects the truth. Stay neutral rather than assert "kept".
+      mergingId = null;
+      mergeNote = `Merge canceled — re-assigned about ${lastReassigned} post(s). The list has been refreshed.`;
+    } else if (caught) {
       error = caught;
     } else if (result && !result.deleted) {
       // The source was kept because the merge could not be guaranteed complete.
@@ -328,7 +353,18 @@
               </div>
             {:else if mergingId === r.term.id}
               <div class="term-merge">
-                {#if hasChildren(r.term.id)}
+                {#if mergeProgress}
+                  <span class="merge-into">
+                    Merging… {mergeProgress.reassigned}{mergeProgress.total ? ` / ${mergeProgress.total}` : ''}
+                    {#if mergeProgress.failed > 0}({mergeProgress.failed} failed){/if}
+                  </span>
+                  {#if mergeProgress.total}
+                    <progress max={mergeProgress.total} value={mergeProgress.reassigned + mergeProgress.failed}></progress>
+                  {:else}
+                    <progress></progress>
+                  {/if}
+                  <button type="button" class="danger" disabled={!mergeAbort} onclick={() => mergeAbort?.abort()}>Cancel</button>
+                {:else if hasChildren(r.term.id)}
                   <span>
                     <strong>{r.term.name}</strong> has child terms. Re-parent or delete them first, then merge.
                   </span>
@@ -466,6 +502,10 @@
   }
   .term-merge .hint {
     flex: 1 1 12rem;
+  }
+  .term-merge progress {
+    flex: 1 1 8rem;
+    min-width: 6rem;
   }
   .merge-note {
     color: #8a6d00;

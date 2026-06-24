@@ -726,7 +726,7 @@ describe('WpClient.mergeTerm', () => {
 
     const result = await client.mergeTerm('categories', 5, 9);
 
-    expect(result).toEqual({ reassigned: 2, failed: [], deleted: true, truncated: false });
+    expect(result).toEqual({ reassigned: 2, failed: [], deleted: true, truncated: false, canceled: false });
     // Post 11 already had the target (9), so the target must not be duplicated.
     expect(updateSpy).toHaveBeenCalledWith(11, { terms: { categories: [9] } }, 'posts');
     expect(updateSpy).toHaveBeenCalledWith(12, { terms: { categories: [9] } }, 'posts');
@@ -779,7 +779,13 @@ describe('WpClient.mergeTerm', () => {
 
     const result = await client.mergeTerm('categories', 5, 9);
 
-    expect(result).toEqual({ reassigned: 0, failed: [], deleted: false, truncated: true });
+    expect(result).toEqual({
+      reassigned: 0,
+      failed: [],
+      deleted: false,
+      truncated: true,
+      canceled: false,
+    });
     expect(listSpy).not.toHaveBeenCalled();
     expect(deleteSpy).not.toHaveBeenCalled();
   });
@@ -816,6 +822,91 @@ describe('WpClient.mergeTerm', () => {
     const deleteSpy = vi.spyOn(client, 'deleteTerm').mockResolvedValue();
 
     await expect(client.mergeTerm('page', 5, 9)).rejects.toThrow(/reserved query parameter/);
+    expect(deleteSpy).not.toHaveBeenCalled();
+  });
+
+  it('reports progress: the total up front, then cumulative counts per re-assignment', async () => {
+    const client = new WpClient(CREDS);
+    vi.spyOn(client, 'listTaxonomies').mockResolvedValue([tax(['post'])]);
+    vi.spyOn(client, 'listPostTypes').mockResolvedValue(POST_TYPES);
+    vi.spyOn(client, 'listPostsByTerm').mockResolvedValue(
+      pageResult([post(11, [5]), post(12, [5])]),
+    );
+    vi.spyOn(client, 'updatePost').mockResolvedValue({} as WpPost);
+    vi.spyOn(client, 'deleteTerm').mockResolvedValue();
+    const progress: { reassigned: number; failed: number; total: number }[] = [];
+
+    await client.mergeTerm('categories', 5, 9, { onProgress: (p) => progress.push({ ...p }) });
+
+    expect(progress).toEqual([
+      { reassigned: 0, failed: 0, total: 2 },
+      { reassigned: 1, failed: 0, total: 2 },
+      { reassigned: 2, failed: 0, total: 2 },
+    ]);
+  });
+
+  it('cancels between re-assignments via the abort signal, keeping the source', async () => {
+    const client = new WpClient(CREDS);
+    vi.spyOn(client, 'listTaxonomies').mockResolvedValue([tax(['post'])]);
+    vi.spyOn(client, 'listPostTypes').mockResolvedValue(POST_TYPES);
+    vi.spyOn(client, 'listPostsByTerm').mockResolvedValue(
+      pageResult([post(11, [5]), post(12, [5]), post(13, [5])]),
+    );
+    const controller = new AbortController();
+    // Abort after the first re-assignment so the merge stops before finishing.
+    const updateSpy = vi.spyOn(client, 'updatePost').mockImplementation(() => {
+      controller.abort();
+      return Promise.resolve({} as WpPost);
+    });
+    const deleteSpy = vi.spyOn(client, 'deleteTerm').mockResolvedValue();
+
+    const result = await client.mergeTerm('categories', 5, 9, { signal: controller.signal });
+
+    expect(result.canceled).toBe(true);
+    expect(result.deleted).toBe(false);
+    expect(result.reassigned).toBe(1);
+    expect(updateSpy).toHaveBeenCalledTimes(1); // stopped before posts 12 and 13
+    expect(deleteSpy).not.toHaveBeenCalled();
+  });
+
+  it('keeps the source when canceled during the final re-assignment (post-loop re-check)', async () => {
+    const client = new WpClient(CREDS);
+    vi.spyOn(client, 'listTaxonomies').mockResolvedValue([tax(['post'])]);
+    vi.spyOn(client, 'listPostTypes').mockResolvedValue(POST_TYPES);
+    vi.spyOn(client, 'listPostsByTerm').mockResolvedValue(pageResult([post(11, [5])]));
+    const controller = new AbortController();
+    // The cancel lands while the only post is being re-assigned: the per-iteration check is past,
+    // so the post-loop re-check is what must honor it.
+    vi.spyOn(client, 'updatePost').mockImplementation(() => {
+      controller.abort();
+      return Promise.resolve({} as WpPost);
+    });
+    const deleteSpy = vi.spyOn(client, 'deleteTerm').mockResolvedValue();
+
+    const result = await client.mergeTerm('categories', 5, 9, { signal: controller.signal });
+
+    expect(result.reassigned).toBe(1); // the post was re-assigned
+    expect(result.canceled).toBe(true); // but the late cancel is honored
+    expect(result.deleted).toBe(false); // so the source is kept, not deleted
+    expect(deleteSpy).not.toHaveBeenCalled();
+  });
+
+  it('does not even start when the signal is already aborted', async () => {
+    const client = new WpClient(CREDS);
+    vi.spyOn(client, 'listTaxonomies').mockResolvedValue([tax(['post'])]);
+    vi.spyOn(client, 'listPostTypes').mockResolvedValue(POST_TYPES);
+    const listSpy = vi
+      .spyOn(client, 'listPostsByTerm')
+      .mockResolvedValue(pageResult([post(11, [5])]));
+    const updateSpy = vi.spyOn(client, 'updatePost').mockResolvedValue({} as WpPost);
+    const deleteSpy = vi.spyOn(client, 'deleteTerm').mockResolvedValue();
+
+    const result = await client.mergeTerm('categories', 5, 9, { signal: AbortSignal.abort() });
+
+    expect(result.canceled).toBe(true);
+    expect(result.reassigned).toBe(0);
+    expect(listSpy).not.toHaveBeenCalled(); // discovery is skipped too
+    expect(updateSpy).not.toHaveBeenCalled();
     expect(deleteSpy).not.toHaveBeenCalled();
   });
 

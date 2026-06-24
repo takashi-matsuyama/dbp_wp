@@ -1,4 +1,5 @@
 import type {
+  MergeProgress,
   MergeTermResult,
   PrintRecord,
   WpMedia,
@@ -574,6 +575,7 @@ export function mergeTerm(
   taxonomy: string,
   fromId: number,
   toId: number,
+  options: { onProgress?: (progress: MergeProgress) => void; signal?: AbortSignal } = {},
 ): Promise<MergeTermResult> {
   if (taxonomy !== TOPICS_REST_BASE) {
     return Promise.reject(new Error('Unknown taxonomy in demo data'));
@@ -586,14 +588,28 @@ export function mergeTerm(
   if (!source || !target) {
     return Promise.reject(new Error('Term not found'));
   }
-  // Re-assign every demo record carrying the source topic to the target (de-duplicated).
+  // Snapshot the records carrying the source topic, mirroring core's discover-then-reassign so the
+  // demo exercises the same progress/cancel contract as the real client.
+  const targets = store.filter((r) => (r.terms[TOPICS_REST_BASE] ?? []).includes(fromId));
   let reassigned = 0;
-  for (const r of store) {
-    const ids = r.terms[TOPICS_REST_BASE];
-    if (ids && ids.includes(fromId)) {
-      r.terms[TOPICS_REST_BASE] = [...new Set(ids.filter((x) => x !== fromId).concat(toId))];
-      reassigned += 1;
+  let canceled = false;
+  options.onProgress?.({ reassigned, failed: 0, total: targets.length });
+  for (const r of targets) {
+    if (options.signal?.aborted) {
+      canceled = true;
+      break;
     }
+    const ids = r.terms[TOPICS_REST_BASE] ?? [];
+    r.terms[TOPICS_REST_BASE] = [...new Set(ids.filter((x) => x !== fromId).concat(toId))];
+    reassigned += 1;
+    options.onProgress?.({ reassigned, failed: 0, total: targets.length });
+  }
+  // A late cancel (during/after the final re-assignment) must still keep the source — mirror core.
+  if (options.signal?.aborted) {
+    canceled = true;
+  }
+  if (canceled) {
+    return Promise.resolve({ reassigned, failed: [], deleted: false, truncated: false, canceled: true });
   }
   // Delete the source term, mirroring deleteTerm: children reparent to the source's parent.
   const parentOfRemoved = source.parent;
@@ -601,5 +617,5 @@ export function mergeTerm(
     if (t.parent === fromId) t.parent = parentOfRemoved;
   }
   DEMO_TERMS.splice(DEMO_TERMS.indexOf(source), 1);
-  return Promise.resolve({ reassigned, failed: [], deleted: true, truncated: false });
+  return Promise.resolve({ reassigned, failed: [], deleted: true, truncated: false, canceled: false });
 }

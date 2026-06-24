@@ -1117,6 +1117,10 @@ async function handleSingleTerm(
  * `{ into }`). Re-assigns the source term's posts to the target across every post type the taxonomy
  * applies to, then deletes the source (only on a fully clean merge). Core REST — no companion
  * plugin; WordPress enforces the caller's term-management capability, so a 403 is surfaced as such.
+ *
+ * The merge is one REST write per post, so the response is an NDJSON stream: `{type:'progress'}`
+ * lines as posts are re-assigned, then a final `{type:'result'}` (or `{type:'error'}`) line.
+ * Closing the connection (the client canceling) aborts the merge, which keeps the source term.
  */
 async function handleTermMerge(
   req: IncomingMessage,
@@ -1163,16 +1167,45 @@ async function handleTermMerge(
     sendJson(res, 400, { error: 'Cannot merge a term into itself.' });
     return;
   }
+
+  // Validation passed — switch to an NDJSON stream of progress, then a final result/error line.
+  res.writeHead(200, {
+    'Content-Type': 'application/x-ndjson; charset=utf-8',
+    'Cache-Control': 'no-store',
+  });
+  const writeEvent = (event: Record<string, unknown>): void => {
+    // The client may have disconnected mid-merge (Cancel); writing to a dead socket would throw.
+    if (res.writableEnded || res.destroyed) {
+      return;
+    }
+    try {
+      res.write(`${JSON.stringify(event)}\n`);
+    } catch {
+      /* socket closed between the guard and the write — ignore; the merge already aborts on close */
+    }
+  };
+  // Cancel the merge when the client hangs up (e.g. the user clicks Cancel), which keeps the source.
+  const controller = new AbortController();
+  const onClose = (): void => controller.abort();
+  res.on('close', onClose);
   try {
-    const result = await new WpClient(credentials).mergeTerm(taxonomy, id, merge.into);
-    sendJson(res, 200, result);
+    const result = await new WpClient(credentials).mergeTerm(taxonomy, id, merge.into, {
+      signal: controller.signal,
+      onProgress: (progress) => writeEvent({ type: 'progress', ...progress }),
+    });
+    writeEvent({ type: 'result', ...result });
   } catch (e) {
-    if (!res.headersSent) {
-      if (e instanceof WpRequestError && e.status === 403) {
-        sendJson(res, 403, { error: 'You do not have permission to merge terms in this taxonomy.' });
-      } else {
-        sendJson(res, 502, { error: e instanceof Error ? e.message : 'Term merge failed' });
-      }
+    const message =
+      e instanceof WpRequestError && e.status === 403
+        ? 'You do not have permission to merge terms in this taxonomy.'
+        : e instanceof Error
+          ? e.message
+          : 'Term merge failed';
+    writeEvent({ type: 'error', error: message });
+  } finally {
+    res.off('close', onClose);
+    if (!res.writableEnded) {
+      res.end();
     }
   }
 }
