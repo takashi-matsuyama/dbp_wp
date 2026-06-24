@@ -1,7 +1,13 @@
 # DBP WP
 
-A local-first app for bulk-editing WordPress content over the REST API — spreadsheet-style
-editing, table views, CSV/JSON import, and print-ready (CSS) typesetting.
+A local-first editor for WordPress. Edit post bodies in Markdown or HTML without opening
+wp-admin, bulk-edit across many posts in a spreadsheet, and typeset print-ready PDFs — all
+from a lightweight `npx` app. Built for the headless-CMS era.
+
+Its **core is single-post body editing**: open a post and write in Markdown or HTML with a
+live preview — a lightweight alternative to the full-page, plugin-heavy block editor. Around
+that core, a spreadsheet view bulk-edits many posts at once, and Print Design turns HTML + CSS
+into print-ready PDFs.
 
 DBP WP talks directly to your own WordPress site using the WordPress REST API and
 [Application Passwords](https://make.wordpress.org/core/2020/11/05/application-passwords-integration-guide/).
