@@ -10,6 +10,7 @@
     type InlineKind,
     type BlockKind,
   } from '../editorOps';
+  import { extractHeadings, proportionalScrollTop, type Heading } from '../editorNav';
 
   let {
     id,
@@ -53,7 +54,9 @@
   // selection and restore it after rewriting the buffer. Only the active mode's textarea mounts.
   let markdownEl = $state<HTMLTextAreaElement | null>(null);
   let htmlEl = $state<HTMLTextAreaElement | null>(null);
+  let previewEl = $state<HTMLIFrameElement | null>(null);
   let fullscreen = $state(false);
+  let outlineOpen = $state(false);
 
   // --- Image insertion (reuses the core media API — no new dependency) ---
   let pickerOpen = $state(false);
@@ -80,6 +83,10 @@
   );
 
   const stats = $derived(textStats(mode === 'markdown' ? markdownText : htmlText));
+
+  // Heading outline of the active buffer (recomputed as the text changes). Cheap regex scan; only
+  // read when the outline panel is open, so a closed panel costs nothing.
+  const headings = $derived(extractHeadings(mode === 'markdown' ? markdownText : htmlText, mode));
 
   async function load(): Promise<void> {
     loading = true;
@@ -212,6 +219,52 @@
     await tick();
     el.focus();
     el.setSelectionRange(r.start, r.end);
+  }
+
+  // One-way editor→preview sync scroll: map the active textarea's scroll fraction onto the preview.
+  // The preview is a `sandbox="allow-same-origin"` srcdoc iframe (no `allow-scripts`), so its scripts
+  // never run, but the parent — same-origin — may drive its scroll position. Guarded so a transiently
+  // cross-origin or not-yet-loaded frame is a no-op rather than a throw.
+  function syncPreviewScroll(): void {
+    const el = activeEl();
+    const frame = previewEl;
+    if (!el || !frame) return;
+    try {
+      const win = frame.contentWindow;
+      const root = frame.contentDocument?.documentElement;
+      if (!win || !root) return;
+      const top = proportionalScrollTop(
+        { scrollTop: el.scrollTop, scrollHeight: el.scrollHeight, clientHeight: el.clientHeight },
+        { scrollHeight: root.scrollHeight, clientHeight: root.clientHeight },
+      );
+      win.scrollTo(0, top);
+    } catch {
+      // Same-origin access denied (shouldn't happen with allow-same-origin) — skip silently.
+    }
+  }
+
+  // Scroll the textarea so the line at `offset` sits near the top. Line-height comes from computed
+  // style (the textarea sets an explicit one, so it parses); this is a deliberate estimate — wrapped
+  // lines above the target make it under-scroll slightly, which is fine for a jump-to-heading.
+  function scrollOffsetIntoView(el: HTMLTextAreaElement, offset: number): void {
+    const line = el.value.slice(0, offset).split('\n').length - 1;
+    const cs = getComputedStyle(el);
+    const lineHeight = parseFloat(cs.lineHeight) || 18;
+    const padTop = parseFloat(cs.paddingTop) || 0;
+    el.scrollTop = Math.max(0, line * lineHeight + padTop - lineHeight);
+  }
+
+  // Jump from an outline entry to its heading: place the caret at the source offset, scroll the
+  // textarea there, and let the preview follow via the one-way sync. Single mechanism, so editor and
+  // preview stay consistent.
+  async function jumpToHeading(h: Heading): Promise<void> {
+    const el = activeEl();
+    if (!el) return;
+    el.focus();
+    el.setSelectionRange(h.offset, h.offset);
+    await tick();
+    scrollOffsetIntoView(el, h.offset);
+    syncPreviewScroll();
   }
 
   // Editor shortcuts: Cmd/Ctrl+S saves, Cmd/Ctrl+B/I apply bold/italic. Other keys fall through.
@@ -421,11 +474,43 @@
         <button
           type="button"
           class="tb-toggle"
+          title="Toggle heading outline"
+          aria-expanded={outlineOpen}
+          aria-controls="editor-outline"
+          onclick={() => (outlineOpen = !outlineOpen)}>{outlineOpen ? '▾ Outline' : '▸ Outline'}</button
+        >
+        <button
+          type="button"
+          class="tb-toggle"
           title="Toggle full screen"
           aria-pressed={fullscreen}
           onclick={() => (fullscreen = !fullscreen)}>{fullscreen ? '⤡ Exit' : '⤢ Full'}</button
         >
       </div>
+
+      {#if outlineOpen}
+        <nav id="editor-outline" class="outline" aria-label="Heading outline">
+          {#if headings.length === 0}
+            <p class="hint">No headings yet.</p>
+          {:else}
+            <ul class="outline-list">
+              {#each headings as h, i (i)}
+                <li>
+                  <button
+                    type="button"
+                    class="outline-item"
+                    style="padding-left: {(h.level - 1) * 0.85 + 0.2}rem"
+                    onclick={() => jumpToHeading(h)}
+                  >
+                    <span class="outline-lv">H{h.level}</span>
+                    <span class="outline-tx">{h.text || '(untitled)'}</span>
+                  </button>
+                </li>
+              {/each}
+            </ul>
+          {/if}
+        </nav>
+      {/if}
 
       {#if pickerOpen}
         <div class="img-picker">
@@ -533,6 +618,7 @@
             ondrop={onEditorDrop}
             ondragover={onEditorDragOver}
             ondragleave={() => (dragOver = false)}
+            onscroll={syncPreviewScroll}
             class:dragover={dragOver}
             spellcheck="false"
             rows="18"
@@ -550,6 +636,7 @@
             ondrop={onEditorDrop}
             ondragover={onEditorDragOver}
             ondragleave={() => (dragOver = false)}
+            onscroll={syncPreviewScroll}
             class:dragover={dragOver}
             spellcheck="false"
             rows="18"
@@ -579,10 +666,12 @@
       <p>Loading…</p>
     {:else}
       <iframe
+        bind:this={previewEl}
         title="Body preview"
         srcdoc={previewDoc}
         sandbox="allow-same-origin"
         class="preview-frame"
+        onload={syncPreviewScroll}
       ></iframe>
     {/if}
   </section>
@@ -767,9 +856,54 @@
   .field textarea {
     font-family: monospace;
     font-size: 0.85rem;
+    /* Explicit line-height so scrollOffsetIntoView can read a parseable px value (else "normal"). */
+    line-height: 1.5;
     resize: vertical;
     width: 100%;
     box-sizing: border-box;
+  }
+  .outline {
+    border: 1px solid #ccc;
+    background: #fafafa;
+    max-height: 12rem;
+    overflow-y: auto;
+    font-size: 0.85rem;
+  }
+  .outline-list {
+    list-style: none;
+    margin: 0;
+    padding: 0.25rem 0;
+  }
+  .outline-item {
+    display: flex;
+    align-items: baseline;
+    gap: 0.4rem;
+    width: 100%;
+    border: none;
+    background: none;
+    text-align: left;
+    cursor: pointer;
+    padding: 0.2rem 0.5rem;
+    font-size: 0.85rem;
+  }
+  .outline-item:hover {
+    background: #eef3ee;
+  }
+  .outline-lv {
+    flex: 0 0 auto;
+    opacity: 0.5;
+    font-size: 0.7rem;
+    font-family: ui-monospace, monospace;
+  }
+  .outline-tx {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+  }
+  .outline .hint {
+    margin: 0;
+    padding: 0.5rem;
   }
   .actions {
     display: flex;
