@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { applyInline, applyBlock, textStats, type TextSelection } from './editorOps';
+import { applyInline, applyBlock, insertImage, textStats, type TextSelection } from './editorOps';
 
 function sel(value: string, start: number, end: number): TextSelection {
   return { value, start, end };
@@ -90,6 +90,36 @@ describe('applyBlock (HTML — wrap)', () => {
     const r = applyBlock(sel('', 0, 0), 'heading', 'html');
     expect(r.value).toBe('<h2>text</h2>');
     expect(r.value.slice(r.start, r.end)).toBe('text'); // typing replaces "text", keeps the tags
+  });
+});
+
+describe('insertImage', () => {
+  it('inserts Markdown image syntax at the cursor with the caret after it', () => {
+    const r = insertImage(sel('a b', 2, 2), { url: 'https://x/y.png', alt: 'Y' }, 'markdown');
+    expect(r.value).toBe('a ![Y](https://x/y.png)b');
+    expect(r.start).toBe(r.end);
+    expect(r.value.slice(0, r.start)).toBe('a ![Y](https://x/y.png)');
+  });
+
+  it('inserts a self-closing HTML img, replacing any selection', () => {
+    const r = insertImage(sel('[x]', 0, 3), { url: 'https://x/y.png', alt: 'Y' }, 'html');
+    expect(r.value).toBe('<img src="https://x/y.png" alt="Y">');
+  });
+
+  it('escapes Markdown alt delimiters and collapses newlines', () => {
+    const r = insertImage(sel('', 0, 0), { url: 'https://x/y.png', alt: 'a]b\\c\nd' }, 'markdown');
+    expect(r.value).toBe('![a\\]b\\\\c d](https://x/y.png)');
+  });
+
+  it('escapes HTML attributes to prevent breaking out of the tag', () => {
+    const r = insertImage(
+      sel('', 0, 0),
+      { url: 'https://x/y.png?a=1&b=2', alt: 'a "quote" <b>' },
+      'html',
+    );
+    expect(r.value).toBe(
+      '<img src="https://x/y.png?a=1&amp;b=2" alt="a &quot;quote&quot; &lt;b&gt;">',
+    );
   });
 });
 

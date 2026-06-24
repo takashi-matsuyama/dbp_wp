@@ -554,7 +554,69 @@ describe('normalizeMedia', () => {
       thumbnailUrl: 'https://example.com/wp-content/uploads/photo-150x150.png',
       title: 'Photo',
       mimeType: 'image/png',
+      sizes: [
+        {
+          name: 'thumbnail',
+          url: 'https://example.com/wp-content/uploads/photo-150x150.png',
+          width: 0,
+          height: 0,
+        },
+        {
+          name: 'medium',
+          url: 'https://example.com/wp-content/uploads/photo-300x300.png',
+          width: 0,
+          height: 0,
+        },
+        { name: 'full', url: 'https://example.com/wp-content/uploads/photo.png', width: 0, height: 0 },
+      ],
     });
+  });
+
+  it('orders sizes smallest-first and synthesizes a full entry from the source', () => {
+    const media = normalizeMedia({
+      id: 7,
+      source_url: 'https://example.com/c.jpg',
+      mime_type: 'image/jpeg',
+      media_details: {
+        width: 2000,
+        height: 1500,
+        sizes: {
+          medium: { source_url: 'https://example.com/c-300.jpg', width: 300, height: 225 },
+          thumbnail: { source_url: 'https://example.com/c-150.jpg', width: 150, height: 150 },
+          large: { source_url: 'https://example.com/c-1024.jpg', width: 1024, height: 768 },
+        },
+      },
+    });
+    expect(media.sizes.map((s) => s.name)).toEqual(['thumbnail', 'medium', 'large', 'full']);
+    expect(media.sizes.at(-1)).toEqual({
+      name: 'full',
+      url: 'https://example.com/c.jpg',
+      width: 2000,
+      height: 1500,
+    });
+  });
+
+  it('does not duplicate a full size already present in media_details.sizes', () => {
+    const media = normalizeMedia({
+      id: 8,
+      source_url: 'https://example.com/d.jpg',
+      mime_type: 'image/jpeg',
+      media_details: {
+        sizes: { full: { source_url: 'https://example.com/d.jpg', width: 800, height: 600 } },
+      },
+    });
+    expect(media.sizes).toEqual([
+      { name: 'full', url: 'https://example.com/d.jpg', width: 800, height: 600 },
+    ]);
+  });
+
+  it('offers no sizes for a non-image attachment', () => {
+    const media = normalizeMedia({
+      id: 9,
+      source_url: 'https://example.com/doc.pdf',
+      mime_type: 'application/pdf',
+    });
+    expect(media.sizes).toEqual([]);
   });
 
   it('falls back to the source URL when no thumbnail size exists', () => {
@@ -582,6 +644,7 @@ describe('normalizeMedia', () => {
       thumbnailUrl: '',
       title: '',
       mimeType: '',
+      sizes: [],
     });
     expect(normalizeMedia({ id: 'x', title: 'not-an-object' })).toEqual({
       id: 0,
@@ -589,6 +652,7 @@ describe('normalizeMedia', () => {
       thumbnailUrl: '',
       title: '',
       mimeType: '',
+      sizes: [],
     });
   });
 });

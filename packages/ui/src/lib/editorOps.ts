@@ -137,6 +137,49 @@ export function applyBlock(sel: TextSelection, kind: BlockKind, mode: EditorMode
   return { value, start: caret, end: caret };
 }
 
+/** Escape a string for safe use inside an HTML double-quoted attribute value. */
+function escapeAttr(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+/**
+ * Escape alt text for Markdown image syntax: a `]` would close `![…]` early and a backslash could
+ * escape the following character, so both are escaped; newlines are collapsed to spaces so the
+ * `![…]()` stays on one line. (Alt is often seeded from a media title, which can contain these.)
+ */
+function escapeMarkdownAlt(alt: string): string {
+  return alt
+    .replace(/\\/g, '\\\\')
+    .replace(/]/g, '\\]')
+    .replace(/\s*\n\s*/g, ' ');
+}
+
+export interface ImageInsert {
+  /** Image URL (a WordPress-generated media size URL). */
+  url: string;
+  /** Alt text. The picker requires it (accessibility); the transform trusts the caller. */
+  alt: string;
+}
+
+/**
+ * Insert an image at the cursor, replacing any selection: `![alt](url)` in Markdown, a self-closing
+ * `<img>` with HTML-escaped attributes in HTML. The caret is left after the inserted markup. (URLs
+ * come from the media library so are well-formed; HTML attributes are still escaped defensively.)
+ */
+export function insertImage(sel: TextSelection, image: ImageInsert, mode: EditorMode): EditResult {
+  const inner =
+    mode === 'markdown'
+      ? `![${escapeMarkdownAlt(image.alt)}](${image.url})`
+      : `<img src="${escapeAttr(image.url)}" alt="${escapeAttr(image.alt)}">`;
+  const value = splice(sel.value, sel.start, sel.end, inner);
+  const caret = sel.start + inner.length;
+  return { value, start: caret, end: caret };
+}
+
 export interface TextStats {
   chars: number;
   words: number;

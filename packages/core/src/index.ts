@@ -7,6 +7,7 @@ export type {
   WpTaxonomy,
   WpTerm,
   WpMedia,
+  WpMediaSize,
   ListPostsParams,
   ListMediaParams,
   ListTermsParams,

@@ -181,7 +181,11 @@ function toWpPost(d: DemoRecord): WpPost {
 }
 
 function toWpMedia(m: DemoMedia): WpMedia {
-  return { ...m };
+  // Demo flags are single files, so the only offered size is the full source.
+  return {
+    ...m,
+    sizes: m.sourceUrl ? [{ name: 'full', url: m.sourceUrl, width: 0, height: 0 }] : [],
+  };
 }
 
 /** Build the body-editing model for a demo record (mode follows a non-empty Markdown source). */

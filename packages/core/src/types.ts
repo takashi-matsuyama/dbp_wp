@@ -200,6 +200,18 @@ export interface DeleteMetaResult {
  * A normalized WordPress media (attachment) item, as used by the media picker and the
  * spreadsheet's featured-image column. Built from a raw `/wp/v2/media` response.
  */
+/** One WordPress-generated size of an image, for the body editor's size picker. */
+export interface WpMediaSize {
+  /** Size name (`thumbnail`, `medium`, `large`, `full`, or a theme-registered size). */
+  name: string;
+  /** URL of this size. */
+  url: string;
+  /** Pixel width, or `0` when WordPress did not report one. */
+  width: number;
+  /** Pixel height, or `0` when WordPress did not report one. */
+  height: number;
+}
+
 export interface WpMedia {
   /** Attachment ID. */
   id: number;
@@ -211,6 +223,11 @@ export interface WpMedia {
   title: string;
   /** MIME type (e.g. `image/png`), or `''` when unknown. */
   mimeType: string;
+  /**
+   * Available sizes for inserting into post body, smallest first, with a synthesized `full` entry
+   * last. Empty for non-images. Built from `media_details.sizes` plus the full-size source.
+   */
+  sizes: WpMediaSize[];
 }
 
 /** Parameters for listing media (image attachments). */

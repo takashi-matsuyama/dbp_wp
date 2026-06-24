@@ -1,8 +1,15 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte';
-  import { renderMarkdown } from '@dbp-wp/core';
-  import { fetchPost, savePostBody } from '../api';
-  import { applyInline, applyBlock, textStats, type InlineKind, type BlockKind } from '../editorOps';
+  import { renderMarkdown, type WpMedia } from '@dbp-wp/core';
+  import { fetchPost, savePostBody, listMedia, uploadMedia } from '../api';
+  import {
+    applyInline,
+    applyBlock,
+    insertImage,
+    textStats,
+    type InlineKind,
+    type BlockKind,
+  } from '../editorOps';
 
   let {
     id,
@@ -47,6 +54,20 @@
   let markdownEl = $state<HTMLTextAreaElement | null>(null);
   let htmlEl = $state<HTMLTextAreaElement | null>(null);
   let fullscreen = $state(false);
+
+  // --- Image insertion (reuses the core media API — no new dependency) ---
+  let pickerOpen = $state(false);
+  let mediaItems = $state<WpMedia[]>([]);
+  let mediaLoading = $state(false);
+  let mediaError = $state<string | null>(null);
+  let mediaSearch = $state('');
+  let mediaPage = $state(1);
+  let mediaTotalPages = $state(1);
+  let uploading = $state(false);
+  let selectedMedia = $state<WpMedia | null>(null);
+  let imgAlt = $state('');
+  let imgSizeName = $state('');
+  let dragOver = $state(false);
 
   function snapshot(): void {
     savedMarkdown = markdownText;
@@ -209,6 +230,124 @@
     }
   }
 
+  async function loadMedia(page = 1): Promise<void> {
+    mediaLoading = true;
+    mediaError = null;
+    try {
+      const query: { page: number; search?: string } = { page };
+      const search = mediaSearch.trim();
+      if (search !== '') query.search = search;
+      const res = await listMedia(query);
+      mediaItems = res.items;
+      mediaTotalPages = res.totalPages;
+      mediaPage = page;
+    } catch (e) {
+      mediaError = e instanceof Error ? e.message : String(e);
+    } finally {
+      mediaLoading = false;
+    }
+  }
+
+  function openPicker(): void {
+    pickerOpen = true;
+    selectedMedia = null;
+    imgAlt = '';
+    if (mediaItems.length === 0) void loadMedia(1);
+  }
+
+  function closePicker(): void {
+    pickerOpen = false;
+    selectedMedia = null;
+    imgAlt = '';
+  }
+
+  // Pick a media item: default to a mid/large size and seed alt from the title (still editable and
+  // still required — the Insert button stays disabled until alt is non-empty).
+  function chooseMedia(m: WpMedia): void {
+    selectedMedia = m;
+    const names = m.sizes.map((s) => s.name);
+    imgSizeName = names.includes('large')
+      ? 'large'
+      : names.includes('full')
+        ? 'full'
+        : (names.at(-1) ?? '');
+    imgAlt = m.title;
+  }
+
+  // Upload an image file (from the file input, a drop, or a paste) and select it for insertion.
+  async function handleFiles(files: FileList | File[] | null): Promise<void> {
+    if (saving) return;
+    const file = files && files[0];
+    if (!file || !file.type.startsWith('image/')) return;
+    uploading = true;
+    mediaError = null;
+    pickerOpen = true;
+    try {
+      const m = await uploadMedia(file);
+      mediaItems = [m, ...mediaItems];
+      chooseMedia(m);
+    } catch (e) {
+      mediaError = e instanceof Error ? e.message : String(e);
+    } finally {
+      uploading = false;
+    }
+  }
+
+  function onEditorDrop(e: DragEvent): void {
+    dragOver = false;
+    const files = e.dataTransfer?.files;
+    if (!files || files.length === 0 || !files[0]?.type.startsWith('image/')) return;
+    e.preventDefault();
+    void handleFiles(files);
+  }
+
+  function onEditorDragOver(e: DragEvent): void {
+    if (!Array.from(e.dataTransfer?.items ?? []).some((it) => it.kind === 'file')) return;
+    e.preventDefault();
+    dragOver = true;
+  }
+
+  function onEditorPaste(e: ClipboardEvent): void {
+    for (const it of e.clipboardData?.items ?? []) {
+      if (it.kind === 'file' && it.type.startsWith('image/')) {
+        const file = it.getAsFile();
+        if (file) {
+          e.preventDefault();
+          void handleFiles([file]);
+        }
+        return;
+      }
+    }
+  }
+
+  function selectedSizeUrl(): string {
+    const m = selectedMedia;
+    if (!m) return '';
+    return m.sizes.find((s) => s.name === imgSizeName)?.url ?? m.sourceUrl;
+  }
+
+  // Insert the chosen image at the cursor in the active buffer, then close the picker and restore
+  // focus. Alt is required (guarded here and via the disabled Insert button).
+  async function confirmInsertImage(): Promise<void> {
+    if (saving) return;
+    const url = selectedSizeUrl();
+    const alt = imgAlt.trim();
+    if (url === '' || alt === '') return;
+    const el = activeEl();
+    if (!el) return;
+    const r = insertImage(
+      { value: el.value, start: el.selectionStart, end: el.selectionEnd },
+      { url, alt },
+      mode,
+    );
+    if (mode === 'markdown') markdownText = r.value;
+    else htmlText = r.value;
+    closePicker();
+    await tick();
+    el.focus();
+    el.setSelectionRange(r.start, r.end);
+  }
+
   function requestClose(): void {
     if (dirty) {
       confirmingDiscard = true;
@@ -276,6 +415,8 @@
         <button type="button" title="Heading" disabled={saving} onclick={() => runBlock('heading')}>H2</button>
         <button type="button" title="Bulleted list" disabled={saving} onclick={() => runBlock('list')}>☰</button>
         <button type="button" title="Quote" disabled={saving} onclick={() => runBlock('quote')}>❝</button>
+        <span class="tb-sep" aria-hidden="true"></span>
+        <button type="button" title="Insert image" aria-pressed={pickerOpen} disabled={saving} onclick={openPicker}>🖼</button>
         <span class="tb-spacer"></span>
         <button
           type="button"
@@ -286,6 +427,101 @@
         >
       </div>
 
+      {#if pickerOpen}
+        <div class="img-picker">
+          <div class="img-picker-head">
+            <strong>Insert image</strong>
+            <button class="link" type="button" onclick={closePicker}>Close</button>
+          </div>
+          <div class="img-tools">
+            <input
+              type="search"
+              placeholder="Search media…"
+              bind:value={mediaSearch}
+              onkeydown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  void loadMedia(1);
+                }
+              }}
+            />
+            <label class="upload-btn">
+              {uploading ? 'Uploading…' : 'Upload'}
+              <input
+                type="file"
+                accept="image/*"
+                hidden
+                disabled={uploading || saving}
+                onchange={(e) => {
+                  const input = e.currentTarget as HTMLInputElement;
+                  void handleFiles(input.files);
+                  input.value = '';
+                }}
+              />
+            </label>
+          </div>
+          {#if mediaError}<p class="error">{mediaError}</p>{/if}
+          {#if mediaLoading}
+            <p class="hint">Loading…</p>
+          {:else if mediaItems.length === 0}
+            <p class="hint">No images yet. Upload one above.</p>
+          {:else}
+            <div class="media-grid">
+              {#each mediaItems as m (m.id)}
+                <button
+                  type="button"
+                  class="media-item"
+                  class:sel={selectedMedia?.id === m.id}
+                  title={m.title}
+                  onclick={() => chooseMedia(m)}
+                >
+                  <img src={m.thumbnailUrl || m.sourceUrl} alt="" />
+                </button>
+              {/each}
+            </div>
+            {#if mediaTotalPages > 1}
+              <div class="pager">
+                <button type="button" disabled={mediaPage <= 1} onclick={() => void loadMedia(mediaPage - 1)}
+                  >Prev</button
+                >
+                <span>{mediaPage} / {mediaTotalPages}</span>
+                <button
+                  type="button"
+                  disabled={mediaPage >= mediaTotalPages}
+                  onclick={() => void loadMedia(mediaPage + 1)}>Next</button
+                >
+              </div>
+            {/if}
+          {/if}
+          {#if selectedMedia}
+            <div class="img-form">
+              {#if selectedMedia.sizes.length > 1}
+                <label>
+                  Size
+                  <select bind:value={imgSizeName}>
+                    {#each selectedMedia.sizes as s (s.name)}
+                      <option value={s.name}
+                        >{s.name}{s.width ? ` (${s.width}×${s.height})` : ''}</option
+                      >
+                    {/each}
+                  </select>
+                </label>
+              {/if}
+              <label class="alt-field">
+                Alt text (required)
+                <input type="text" bind:value={imgAlt} placeholder="Describe the image" />
+              </label>
+              <button
+                class="primary"
+                type="button"
+                disabled={imgAlt.trim() === '' || saving}
+                onclick={confirmInsertImage}>Insert</button
+              >
+            </div>
+          {/if}
+        </div>
+      {/if}
+
       {#if mode === 'markdown'}
         <label class="field">
           <span>Markdown source</span>
@@ -293,6 +529,11 @@
             bind:this={markdownEl}
             bind:value={markdownText}
             onkeydown={onEditorKeydown}
+            onpaste={onEditorPaste}
+            ondrop={onEditorDrop}
+            ondragover={onEditorDragOver}
+            ondragleave={() => (dragOver = false)}
+            class:dragover={dragOver}
             spellcheck="false"
             rows="18"
             disabled={saving}
@@ -305,6 +546,11 @@
             bind:this={htmlEl}
             bind:value={htmlText}
             onkeydown={onEditorKeydown}
+            onpaste={onEditorPaste}
+            ondrop={onEditorDrop}
+            ondragover={onEditorDragOver}
+            ondragleave={() => (dragOver = false)}
+            class:dragover={dragOver}
             spellcheck="false"
             rows="18"
             disabled={saving}
@@ -433,6 +679,84 @@
     opacity: 0.6;
     font-size: 0.8rem;
     white-space: nowrap;
+  }
+  .img-picker {
+    border: 1px solid #ccc;
+    background: #fafafa;
+    padding: 0.6rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    font-size: 0.85rem;
+  }
+  .img-picker-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .img-tools {
+    display: flex;
+    gap: 0.5rem;
+  }
+  .img-tools input[type='search'] {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+  .upload-btn {
+    border: 1px solid #ccc;
+    background: #fff;
+    padding: 0.25rem 0.6rem;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .media-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(64px, 1fr));
+    gap: 0.35rem;
+    max-height: 12rem;
+    overflow-y: auto;
+  }
+  .media-item {
+    border: 2px solid transparent;
+    padding: 0;
+    cursor: pointer;
+    background: #fff;
+    aspect-ratio: 1;
+    overflow: hidden;
+  }
+  .media-item.sel {
+    border-color: #2a7a2a;
+  }
+  .media-item img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+  }
+  .pager {
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
+  }
+  .img-form {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+    border-top: 1px solid #ddd;
+    padding-top: 0.5rem;
+  }
+  .img-form label {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+  }
+  .img-form input[type='text'] {
+    width: 100%;
+    box-sizing: border-box;
+  }
+  textarea.dragover {
+    outline: 2px dashed #2a7a2a;
+    outline-offset: -2px;
   }
   .field {
     display: flex;

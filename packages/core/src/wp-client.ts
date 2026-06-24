@@ -14,6 +14,7 @@ import type {
   UpdatePostFields,
   WpCredentials,
   WpMedia,
+  WpMediaSize,
   WpPost,
   WpPostEdit,
   WpPostResponse,
@@ -848,18 +849,68 @@ function extractThumbnailUrl(mediaDetails: unknown): string {
 }
 
 /**
+ * Build the size list for the body editor's image picker from `media_details`: every generated
+ * size (smallest first by width) plus a synthesized `full` entry pointing at the source URL when
+ * the response did not already include one. Returns `[]` when nothing is resolvable (e.g. a
+ * non-image attachment).
+ */
+function extractSizes(mediaDetails: unknown, sourceUrl: string, mimeType: string): WpMediaSize[] {
+  // Sizes are only meaningful for images; a non-image attachment has nothing to insert as <img>.
+  if (!mimeType.startsWith('image/')) {
+    return [];
+  }
+  const details =
+    typeof mediaDetails === 'object' && mediaDetails !== null
+      ? (mediaDetails as Record<string, unknown>)
+      : {};
+  const out: WpMediaSize[] = [];
+  const sizes = details.sizes;
+  if (sizes !== null && typeof sizes === 'object') {
+    for (const [name, raw] of Object.entries(sizes as Record<string, unknown>)) {
+      if (raw === null || typeof raw !== 'object') {
+        continue;
+      }
+      const s = raw as Record<string, unknown>;
+      const url = typeof s.source_url === 'string' ? s.source_url : '';
+      if (url === '') {
+        continue;
+      }
+      out.push({
+        name,
+        url,
+        width: typeof s.width === 'number' ? s.width : 0,
+        height: typeof s.height === 'number' ? s.height : 0,
+      });
+    }
+  }
+  out.sort((a, b) => a.width - b.width);
+  // Some responses omit `full` from `sizes`; ensure it is always offered (and not duplicated).
+  if (sourceUrl !== '' && !out.some((s) => s.name === 'full' || s.url === sourceUrl)) {
+    out.push({
+      name: 'full',
+      url: sourceUrl,
+      width: typeof details.width === 'number' ? details.width : 0,
+      height: typeof details.height === 'number' ? details.height : 0,
+    });
+  }
+  return out;
+}
+
+/**
  * Normalize a raw `/wp/v2/media` item into {@link WpMedia}. Accepts `unknown` and guards each
  * field, so a malformed entry degrades to empty strings rather than throwing.
  */
 export function normalizeMedia(raw: unknown): WpMedia {
   const obj = (typeof raw === 'object' && raw !== null ? raw : {}) as Record<string, unknown>;
   const sourceUrl = typeof obj.source_url === 'string' ? obj.source_url : '';
+  const mimeType = typeof obj.mime_type === 'string' ? obj.mime_type : '';
   return {
     id: typeof obj.id === 'number' ? obj.id : 0,
     sourceUrl,
     thumbnailUrl: extractThumbnailUrl(obj.media_details) || sourceUrl,
     title: extractRendered(obj.title),
-    mimeType: typeof obj.mime_type === 'string' ? obj.mime_type : '',
+    mimeType,
+    sizes: extractSizes(obj.media_details, sourceUrl, mimeType),
   };
 }
 
