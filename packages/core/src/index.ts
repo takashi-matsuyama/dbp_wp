@@ -11,6 +11,7 @@ export type {
   ListPostsParams,
   ListMediaParams,
   ListTermsParams,
+  MergeTermResult,
   UpdatePostFields,
   DeleteMetaResult,
 } from './types';
@@ -24,6 +25,7 @@ export {
   normalizePostForEdit,
   normalizeTaxonomies,
   normalizeTerm,
+  computeMergedTermIds,
   buildContentDisposition,
 } from './wp-client';
 export { renderMarkdown } from './markdown';

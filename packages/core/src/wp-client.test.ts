@@ -1,11 +1,13 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   MARKDOWN_META_KEY,
+  WpClient,
   buildAuthHeader,
   buildContentDisposition,
   buildMetaBody,
   buildPostBody,
   buildUpdateBody,
+  computeMergedTermIds,
   hasConnectorNamespace,
   isPrivateAddress,
   normalizeMedia,
@@ -18,7 +20,7 @@ import {
   parseDeleteMetaResponse,
   sanitizeMetaKeys,
 } from './wp-client';
-import type { WpPostResponse } from './types';
+import type { WpCredentials, WpPost, WpPostType, WpTaxonomy, WpPostResponse } from './types';
 
 describe('buildAuthHeader', () => {
   it('builds an HTTP Basic header from Application Password credentials', () => {
@@ -380,16 +382,31 @@ describe('normalizePost taxonomy terms', () => {
 });
 
 describe('normalizeTaxonomies', () => {
-  it('maps the /taxonomies object to a list with rest_base and hierarchical', () => {
+  it('maps the /taxonomies object to a list with rest_base, hierarchical, and types', () => {
     expect(
       normalizeTaxonomies({
-        category: { name: 'Categories', slug: 'category', rest_base: 'categories', hierarchical: true },
+        category: {
+          name: 'Categories',
+          slug: 'category',
+          rest_base: 'categories',
+          hierarchical: true,
+          types: ['post', 'page'],
+        },
         post_tag: { name: 'Tags', slug: 'post_tag', rest_base: 'tags', hierarchical: false },
       }),
     ).toEqual([
-      { slug: 'category', restBase: 'categories', name: 'Categories', hierarchical: true },
-      { slug: 'post_tag', restBase: 'tags', name: 'Tags', hierarchical: false },
+      { slug: 'category', restBase: 'categories', name: 'Categories', hierarchical: true, types: ['post', 'page'] },
+      // `types` defaults to [] when WordPress reports none.
+      { slug: 'post_tag', restBase: 'tags', name: 'Tags', hierarchical: false, types: [] },
     ]);
+  });
+
+  it('keeps only string entries in types (drops malformed ones)', () => {
+    expect(
+      normalizeTaxonomies({
+        genre: { name: 'Genre', slug: 'genre', rest_base: 'genres', hierarchical: false, types: ['book', 5, null] },
+      }),
+    ).toEqual([{ slug: 'genre', restBase: 'genres', name: 'Genre', hierarchical: false, types: ['book'] }]);
   });
 
   it('skips entries without a valid rest_base and returns [] for a non-object', () => {
@@ -655,5 +672,155 @@ describe('normalizeMedia', () => {
       mimeType: '',
       sizes: [],
     });
+  });
+});
+
+describe('computeMergedTermIds', () => {
+  it('removes the source and adds the target', () => {
+    expect(computeMergedTermIds([5, 7], 5, 9)).toEqual([7, 9]);
+  });
+
+  it('de-duplicates when the post already carries the target', () => {
+    expect(computeMergedTermIds([5, 9], 5, 9)).toEqual([9]);
+  });
+
+  it('adds the target even when the source is absent', () => {
+    expect(computeMergedTermIds([7], 5, 9)).toEqual([7, 9]);
+  });
+
+  it('collapses to just the target when the source was the only term', () => {
+    expect(computeMergedTermIds([5], 5, 9)).toEqual([9]);
+  });
+});
+
+describe('WpClient.mergeTerm', () => {
+  const CREDS: WpCredentials = {
+    siteUrl: 'https://example.com',
+    username: 'u',
+    applicationPassword: 'p',
+  };
+  const POST_TYPES: WpPostType[] = [{ slug: 'post', restBase: 'posts', name: 'Posts' }];
+  const post = (id: number, ids: number[]): WpPost =>
+    ({ id, terms: { categories: ids } }) as unknown as WpPost;
+  const pageResult = (
+    items: WpPost[],
+    opts: { totalPages?: number; pagesReliable?: boolean } = {},
+  ) => ({ items, totalPages: opts.totalPages ?? 1, pagesReliable: opts.pagesReliable ?? true });
+  const tax = (types: string[]): WpTaxonomy => ({
+    slug: 'category',
+    restBase: 'categories',
+    name: 'Categories',
+    hierarchical: true,
+    types,
+  });
+
+  it('reassigns the source term to the target across the taxonomy types, then deletes the source', async () => {
+    const client = new WpClient(CREDS);
+    vi.spyOn(client, 'listTaxonomies').mockResolvedValue([tax(['post'])]);
+    vi.spyOn(client, 'listPostTypes').mockResolvedValue(POST_TYPES);
+    vi.spyOn(client, 'listPostsByTerm').mockResolvedValue(
+      pageResult([post(11, [5, 9]), post(12, [5])]),
+    );
+    const updateSpy = vi.spyOn(client, 'updatePost').mockResolvedValue({} as WpPost);
+    const deleteSpy = vi.spyOn(client, 'deleteTerm').mockResolvedValue();
+
+    const result = await client.mergeTerm('categories', 5, 9);
+
+    expect(result).toEqual({ reassigned: 2, failed: [], deleted: true, truncated: false });
+    // Post 11 already had the target (9), so the target must not be duplicated.
+    expect(updateSpy).toHaveBeenCalledWith(11, { terms: { categories: [9] } }, 'posts');
+    expect(updateSpy).toHaveBeenCalledWith(12, { terms: { categories: [9] } }, 'posts');
+    expect(deleteSpy).toHaveBeenCalledWith('categories', 5);
+  });
+
+  it('keeps the source term (no delete) when a reassignment fails', async () => {
+    const client = new WpClient(CREDS);
+    vi.spyOn(client, 'listTaxonomies').mockResolvedValue([tax(['post'])]);
+    vi.spyOn(client, 'listPostTypes').mockResolvedValue(POST_TYPES);
+    vi.spyOn(client, 'listPostsByTerm').mockResolvedValue(
+      pageResult([post(11, [5]), post(12, [5])]),
+    );
+    vi.spyOn(client, 'updatePost')
+      .mockResolvedValueOnce({} as WpPost)
+      .mockRejectedValueOnce(new Error('boom'));
+    const deleteSpy = vi.spyOn(client, 'deleteTerm').mockResolvedValue();
+
+    const result = await client.mergeTerm('categories', 5, 9);
+
+    expect(result.reassigned).toBe(1);
+    expect(result.failed).toEqual([{ id: 12, error: 'boom' }]);
+    expect(result.deleted).toBe(false);
+    expect(deleteSpy).not.toHaveBeenCalled();
+  });
+
+  it('keeps the source term when the taxonomy spans a post type unreachable over REST', async () => {
+    const client = new WpClient(CREDS);
+    // Attached to 'post' (reachable) and 'product' (no matching REST post type): cannot fully merge.
+    vi.spyOn(client, 'listTaxonomies').mockResolvedValue([tax(['post', 'product'])]);
+    vi.spyOn(client, 'listPostTypes').mockResolvedValue(POST_TYPES);
+    vi.spyOn(client, 'listPostsByTerm').mockResolvedValue(pageResult([post(11, [5])]));
+    vi.spyOn(client, 'updatePost').mockResolvedValue({} as WpPost);
+    const deleteSpy = vi.spyOn(client, 'deleteTerm').mockResolvedValue();
+
+    const result = await client.mergeTerm('categories', 5, 9);
+
+    expect(result.reassigned).toBe(1);
+    expect(result.truncated).toBe(true);
+    expect(result.deleted).toBe(false);
+    expect(deleteSpy).not.toHaveBeenCalled();
+  });
+
+  it('keeps the source term when the taxonomy reports no reachable post types', async () => {
+    const client = new WpClient(CREDS);
+    vi.spyOn(client, 'listTaxonomies').mockResolvedValue([tax([])]);
+    vi.spyOn(client, 'listPostTypes').mockResolvedValue(POST_TYPES);
+    const listSpy = vi.spyOn(client, 'listPostsByTerm');
+    const deleteSpy = vi.spyOn(client, 'deleteTerm').mockResolvedValue();
+
+    const result = await client.mergeTerm('categories', 5, 9);
+
+    expect(result).toEqual({ reassigned: 0, failed: [], deleted: false, truncated: true });
+    expect(listSpy).not.toHaveBeenCalled();
+    expect(deleteSpy).not.toHaveBeenCalled();
+  });
+
+  it('keeps paging without a reliable page count, stopping at a short (non-full) page', async () => {
+    const client = new WpClient(CREDS);
+    vi.spyOn(client, 'listTaxonomies').mockResolvedValue([tax(['post'])]);
+    vi.spyOn(client, 'listPostTypes').mockResolvedValue(POST_TYPES);
+    const full = Array.from({ length: 100 }, (_, i) => post(1000 + i, [5]));
+    // No X-WP-TotalPages (pagesReliable=false): a full page must not be trusted as the last page.
+    const listSpy = vi
+      .spyOn(client, 'listPostsByTerm')
+      .mockResolvedValueOnce(pageResult(full, { pagesReliable: false }))
+      .mockResolvedValueOnce(pageResult([post(1200, [5])], { pagesReliable: false }));
+    vi.spyOn(client, 'updatePost').mockResolvedValue({} as WpPost);
+    const deleteSpy = vi.spyOn(client, 'deleteTerm').mockResolvedValue();
+
+    const result = await client.mergeTerm('categories', 5, 9);
+
+    // Both pages were enumerated (101 posts), then the source was deleted.
+    expect(listSpy).toHaveBeenCalledTimes(2);
+    expect(result.reassigned).toBe(101);
+    expect(result.deleted).toBe(true);
+    expect(deleteSpy).toHaveBeenCalledWith('categories', 5);
+  });
+
+  it('rejects a taxonomy whose REST base collides with a reserved query parameter', async () => {
+    const client = new WpClient(CREDS);
+    vi.spyOn(client, 'listTaxonomies').mockResolvedValue([
+      { slug: 'p', restBase: 'page', name: 'P', hierarchical: false, types: ['post'] },
+    ]);
+    vi.spyOn(client, 'listPostTypes').mockResolvedValue(POST_TYPES);
+    // listPostsByTerm is the real method: it must throw on the reserved base before any network.
+    const deleteSpy = vi.spyOn(client, 'deleteTerm').mockResolvedValue();
+
+    await expect(client.mergeTerm('page', 5, 9)).rejects.toThrow(/reserved query parameter/);
+    expect(deleteSpy).not.toHaveBeenCalled();
+  });
+
+  it('rejects merging a term into itself', async () => {
+    const client = new WpClient(CREDS);
+    await expect(client.mergeTerm('categories', 5, 5)).rejects.toThrow(/itself/);
   });
 });

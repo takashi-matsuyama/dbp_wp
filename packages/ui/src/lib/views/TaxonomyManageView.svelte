@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { WpTaxonomy, WpTerm } from '@dbp-wp/core';
-  import { fetchTaxonomies, fetchAllTerms, createTerm, updateTerm, deleteTerm } from '../api';
+  import { fetchTaxonomies, fetchAllTerms, createTerm, updateTerm, deleteTerm, mergeTerm } from '../api';
   import { flattenTermTree } from '../termTree';
 
   // The taxonomy manager is scoped to the currently selected post type's taxonomies (consistent
@@ -23,16 +23,27 @@
   let newName = $state('');
   let newParent = $state(0);
 
-  // Per-row edit / delete state (only one row at a time).
+  // Per-row edit / delete / merge state (only one row at a time).
   let editingId = $state<number | null>(null);
   let editName = $state('');
   let editParent = $state(0);
   let deletingId = $state<number | null>(null);
+  let mergingId = $state<number | null>(null);
+  let mergeTarget = $state(0);
+  // Lingering note when a merge could not delete the source (partial failure or truncation).
+  let mergeNote = $state<string | null>(null);
 
   const rows = $derived(flattenTermTree(terms, filter));
+  // The full tree, ignoring the filter — used to populate the merge target list so a typed filter
+  // can never hide a valid target term.
+  const treeRows = $derived(flattenTermTree(terms, ''));
   const currentTax = $derived(taxonomies.find((t) => t.restBase === selectedTax) ?? null);
   // Only hierarchical taxonomies have parents; a flat taxonomy (e.g. tags) hides all parent UI.
   const isHierarchical = $derived(currentTax?.hierarchical ?? false);
+  // When a hierarchical tree is truncated, child terms beyond the cap are not loaded, so
+  // `hasChildren` cannot be trusted — block merge (which must reject a term with children) until
+  // the full tree is available. A flat taxonomy has no children, so truncation is harmless there.
+  const mergeBlockedByTruncation = $derived(isHierarchical && truncated);
 
   // Monotonic token so a slow load for a previously-selected taxonomy can't overwrite a newer one.
   let loadToken = 0;
@@ -86,6 +97,13 @@
   function resetRowState(): void {
     editingId = null;
     deletingId = null;
+    mergingId = null;
+  }
+
+  /** Whether a term has child terms — a merge is blocked for those (WordPress would reparent the
+   *  children on delete, an unexpected hierarchy change). */
+  function hasChildren(id: number): boolean {
+    return terms.some((t) => t.parent === id);
   }
 
   async function onChangeTax(): Promise<void> {
@@ -162,6 +180,50 @@
     }
   }
 
+  function startMerge(t: WpTerm): void {
+    if (mergeBlockedByTruncation) return;
+    editingId = null;
+    deletingId = null;
+    mergeNote = null;
+    mergingId = t.id;
+    mergeTarget = 0;
+  }
+
+  async function confirmMerge(t: WpTerm): Promise<void> {
+    if (busy || mergeTarget <= 0 || mergeTarget === t.id) return;
+    busy = true;
+    error = null;
+    mergeNote = null;
+    const name = t.name;
+    let caught: string | null = null;
+    let result: Awaited<ReturnType<typeof mergeTerm>> | null = null;
+    try {
+      result = await mergeTerm(selectedTax, t.id, mergeTarget);
+      mergingId = null;
+    } catch (e) {
+      caught = msg(e);
+    }
+    // Re-assignments may have already happened even when the call threw (e.g. the source delete
+    // failed after every post was moved). Always refresh so the term list and the app's post cache
+    // reflect reality, then report the outcome (loadTerms clears `error`, so set it afterwards).
+    try {
+      await loadTerms();
+    } catch {
+      /* a load failure is surfaced below by `caught` if present, else the next reload */
+    }
+    onchanged?.();
+    if (caught) {
+      error = caught;
+    } else if (result && !result.deleted) {
+      // The source was kept because the merge could not be guaranteed complete.
+      mergeNote =
+        result.failed.length > 0
+          ? `Re-assigned ${result.reassigned} post(s), but ${result.failed.length} failed. "${name}" was kept — re-run the merge to finish.`
+          : `Re-assigned ${result.reassigned} post(s). This taxonomy is too large or spans a post type not available over REST, so "${name}" was kept — re-run the merge to finish.`;
+    }
+    busy = false;
+  }
+
   // Reload whenever the selected post type changes (and on first mount).
   let lastType = '';
   $effect(() => {
@@ -223,8 +285,11 @@
     </form>
 
     {#if error}<p class="error">{error}</p>{/if}
+    {#if mergeNote}<p class="hint merge-note">{mergeNote}</p>{/if}
     {#if truncated}
-      <p class="hint">Showing the first terms only; this taxonomy is very large.</p>
+      <p class="hint">
+        Showing the first terms only; this taxonomy is very large.{#if isHierarchical} Merge is unavailable until the full tree loads (child terms can't be confirmed).{/if}
+      </p>
     {/if}
 
     {#if rows.length === 0}
@@ -261,13 +326,49 @@
                 <button type="button" class="danger" disabled={busy} onclick={() => confirmDelete(r.term)}>Delete</button>
                 <button type="button" disabled={busy} onclick={() => (deletingId = null)}>Cancel</button>
               </div>
+            {:else if mergingId === r.term.id}
+              <div class="term-merge">
+                {#if hasChildren(r.term.id)}
+                  <span>
+                    <strong>{r.term.name}</strong> has child terms. Re-parent or delete them first, then merge.
+                  </span>
+                  <button type="button" disabled={busy} onclick={() => (mergingId = null)}>Cancel</button>
+                {:else}
+                  <span class="merge-into">
+                    Merge <strong>{r.term.name}</strong> into
+                    <select bind:value={mergeTarget} disabled={busy} aria-label="Merge target term">
+                      <option value={0}>(select a term)</option>
+                      {#each treeRows as o (o.term.id)}
+                        {#if o.term.id !== r.term.id}
+                          <option value={o.term.id}>{'— '.repeat(o.depth)}{o.term.name}</option>
+                        {/if}
+                      {/each}
+                    </select>
+                  </span>
+                  <span class="hint">
+                    {#if r.term.count > 0}
+                      Its {r.term.count} post{r.term.count === 1 ? '' : 's'} move to the target across all post types, then it is deleted. This cannot be undone.
+                    {:else}
+                      It has no assigned posts; merging just deletes it. This cannot be undone.
+                    {/if}
+                  </span>
+                  <button type="button" class="primary" disabled={busy || mergeTarget <= 0} onclick={() => confirmMerge(r.term)}>Merge</button>
+                  <button type="button" disabled={busy} onclick={() => (mergingId = null)}>Cancel</button>
+                {/if}
+              </div>
             {:else}
               <div class="term-row">
                 <span class="term-name">{r.term.name}</span>
                 <span class="term-count" title="Posts assigned">{r.term.count}</span>
                 <span class="term-actions">
                   <button type="button" disabled={busy || loading} onclick={() => startEdit(r.term)}>Edit</button>
-                  <button type="button" disabled={busy || loading} onclick={() => { editingId = null; deletingId = r.term.id; }}>Delete</button>
+                  <button
+                    type="button"
+                    disabled={busy || loading || mergeBlockedByTruncation}
+                    title={mergeBlockedByTruncation ? 'Merge is unavailable while the term tree is incomplete (too large to load fully).' : undefined}
+                    onclick={() => startMerge(r.term)}
+                  >Merge</button>
+                  <button type="button" disabled={busy || loading} onclick={() => { editingId = null; mergingId = null; deletingId = r.term.id; }}>Delete</button>
                 </span>
               </div>
             {/if}
@@ -322,10 +423,15 @@
   }
   .term-row,
   .term-edit,
-  .term-delete {
+  .term-delete,
+  .term-merge {
     display: flex;
     gap: 0.5rem;
     align-items: center;
+  }
+  /* The merge panel carries more controls (select + impact + actions); let it wrap on narrow widths. */
+  .term-merge {
+    flex-wrap: wrap;
   }
   .term-name {
     flex: 1 1 auto;
@@ -351,6 +457,18 @@
   .term-delete span {
     flex: 1 1 auto;
     font-size: 0.85rem;
+  }
+  .term-merge .merge-into {
+    display: flex;
+    gap: 0.3rem;
+    align-items: center;
+    font-size: 0.85rem;
+  }
+  .term-merge .hint {
+    flex: 1 1 12rem;
+  }
+  .merge-note {
+    color: #8a6d00;
   }
   .danger {
     color: #b00020;

@@ -166,6 +166,13 @@ export interface WpTaxonomy {
   name: string;
   /** Whether terms form a hierarchy (categories) rather than a flat list (tags). */
   hierarchical: boolean;
+  /**
+   * Internal slugs of the post types this taxonomy is attached to (e.g. `['post']`), from the
+   * `/wp/v2/taxonomies` `types` field. A term merge re-assigns the source term across every one
+   * of these types before deleting it, so no other type silently loses the assignment. Possibly
+   * empty when WordPress reports none.
+   */
+  types: string[];
 }
 
 /** A normalized taxonomy term, as used by the taxonomy picker and the spreadsheet's columns. */
@@ -188,6 +195,26 @@ export interface ListTermsParams {
   perPage?: number;
   /** Free-text search across term names/slugs. */
   search?: string;
+}
+
+/**
+ * Outcome of a term merge ({@link WpClient.mergeTerm}). The source term is deleted only when the
+ * merge completed fully: every assignment across every reachable post type was re-assigned to the
+ * target, with no per-post failure and no page-cap truncation. Otherwise the source is kept so the
+ * caller can surface the partial result and re-run.
+ */
+export interface MergeTermResult {
+  /** Posts successfully re-assigned from the source term to the target. */
+  reassigned: number;
+  /** Posts that could not be re-assigned (kept so the source term is not orphaned). */
+  failed: { id: number; error: string }[];
+  /** Whether the source term was deleted (true only on a fully clean merge). */
+  deleted: boolean;
+  /**
+   * True when the merge could not be guaranteed complete — a per-type page cap was hit, or the
+   * taxonomy is attached to a post type not addressable over REST. The source is kept.
+   */
+  truncated: boolean;
 }
 
 /** Result of a per-post meta delete via the companion plugin. */

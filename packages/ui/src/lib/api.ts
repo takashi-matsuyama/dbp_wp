@@ -36,3 +36,4 @@ export const resolveTerms = impl.resolveTerms;
 export const createTerm = impl.createTerm;
 export const updateTerm = impl.updateTerm;
 export const deleteTerm = impl.deleteTerm;
+export const mergeTerm = impl.mergeTerm;

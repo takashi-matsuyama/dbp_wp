@@ -8,6 +8,7 @@ import {
   parseRelation,
   parseSinglePostSave,
   parseTermCreate,
+  parseTermMerge,
   parseTermUpdate,
 } from './updates';
 
@@ -309,6 +310,21 @@ describe('parseTermUpdate', () => {
     expect(parseTermUpdate({ parent: 1.5 })).toBeNull();
     expect(parseTermUpdate({ slug: 'bad slug' })).toBeNull();
     expect(parseTermUpdate({ description: 5 })).toBeNull();
+  });
+});
+
+describe('parseTermMerge', () => {
+  it('parses a target term id', () => {
+    expect(parseTermMerge({ into: 7 })).toEqual({ into: 7 });
+  });
+
+  it('rejects a missing, non-positive, or fractional target', () => {
+    expect(parseTermMerge({})).toBeNull();
+    expect(parseTermMerge({ into: 0 })).toBeNull();
+    expect(parseTermMerge({ into: -1 })).toBeNull();
+    expect(parseTermMerge({ into: 1.5 })).toBeNull();
+    expect(parseTermMerge({ into: '7' })).toBeNull();
+    expect(parseTermMerge(null)).toBeNull();
   });
 });
 

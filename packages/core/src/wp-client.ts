@@ -11,6 +11,7 @@ import type {
   ListMediaParams,
   ListPostsParams,
   ListTermsParams,
+  MergeTermResult,
   UpdatePostFields,
   WpCredentials,
   WpMedia,
@@ -37,6 +38,44 @@ const RESERVED_KEYS = new Set(['__proto__', 'prototype', 'constructor']);
 /** Page cap for {@link WpClient.listAllTerms} (100 terms/page) — bounds a runaway on a huge
  *  taxonomy while covering typical category trees. */
 const MAX_TERM_PAGES = 10;
+
+/** Per-post-type page cap for a term merge ({@link WpClient.mergeTerm}, 100 posts/page) — bounds a
+ *  runaway on a term assigned to a very large number of posts. When a type exceeds it, the merge
+ *  is reported truncated and the source term is kept rather than deleted with stragglers behind. */
+const MAX_MERGE_PAGES = 50;
+
+/** WordPress posts-collection query parameters. A taxonomy whose REST base collides with one of
+ *  these cannot be used as a term filter ({@link WpClient.listPostsByTerm}) without overwriting a
+ *  control parameter (e.g. `?page=<termId>` would page rather than filter, silently returning the
+ *  wrong posts). Such a base is rejected so a merge can never re-assign and delete based on a
+ *  mis-filtered result. Lower-cased; the taxonomy REST base is compared case-insensitively. */
+const RESERVED_POST_QUERY_PARAMS = new Set([
+  'context',
+  'page',
+  'per_page',
+  'search',
+  'after',
+  'modified_after',
+  'before',
+  'modified_before',
+  'author',
+  'author_exclude',
+  'exclude',
+  'include',
+  'offset',
+  'order',
+  'orderby',
+  'slug',
+  'status',
+  'tax_relation',
+  'sticky',
+  '_embed',
+  '_fields',
+  '_method',
+  '_envelope',
+  '_jsonp',
+  '_locale',
+]);
 
 /** REST field added by the companion plugin to carry arbitrary post meta. */
 const META_FIELD = 'dbp_wp_meta';
@@ -317,6 +356,49 @@ export class WpClient {
     });
     const raw = await this.request<WpPostResponse[]>(`/wp/v2/${type}?${query.toString()}`);
     return raw.map(buildPrintRecord);
+  }
+
+  /**
+   * List posts of a type that are assigned a given taxonomy term (`GET /wp/v2/<type>?<taxRestBase>=
+   * <termId>`), in edit context and across all statuses (`status=any`, so drafts/pending are not
+   * silently skipped). Reads `X-WP-TotalPages` for paging. Used by {@link WpClient.mergeTerm} to
+   * find every post that must be re-assigned. A core REST call — no companion plugin needed.
+   */
+  async listPostsByTerm(
+    type: string,
+    taxRestBase: string,
+    termId: number,
+    params: { page?: number; perPage?: number } = {},
+  ): Promise<{ items: WpPost[]; totalPages: number; pagesReliable: boolean }> {
+    assertRouteSegment(type);
+    assertRouteSegment(taxRestBase);
+    assertTermId(termId);
+    // The taxonomy's REST base becomes the posts-collection filter param (e.g. `categories=5`).
+    // Reject one that collides with a control parameter: it would overwrite the control rather than
+    // filter, returning the wrong posts — dangerous when the caller then re-assigns and deletes.
+    if (RESERVED_POST_QUERY_PARAMS.has(taxRestBase.toLowerCase())) {
+      throw new Error(`Taxonomy REST base collides with a reserved query parameter: ${taxRestBase}`);
+    }
+    const perPage = clampInt(params.perPage ?? 100, 1, 100);
+    const page = clampInt(params.page ?? 1, 1, Number.MAX_SAFE_INTEGER);
+    const query = new URLSearchParams({
+      context: 'edit',
+      per_page: String(perPage),
+      page: String(page),
+      status: 'any',
+    });
+    query.set(taxRestBase, String(termId));
+    const response = await this.send(`/wp/v2/${type}?${query.toString()}`);
+    const raw = (await response.json()) as unknown;
+    // `pagesReliable` is false when WordPress did not send a usable `X-WP-TotalPages`. A merge must
+    // not trust a defaulted page count of 1 to mean "fully enumerated" before deleting the source.
+    const header = response.headers.get('X-WP-TotalPages');
+    const pagesReliable = header !== null && /^\d+$/.test(header.trim());
+    return {
+      items: Array.isArray(raw) ? raw.map(normalizePost) : [],
+      totalPages: parseTotalPages(header),
+      pagesReliable,
+    };
   }
 
   /**
@@ -674,6 +756,110 @@ export class WpClient {
   }
 
   /**
+   * Merge the source term (`fromId`) into the target term (`toId`) within one taxonomy: re-assign
+   * every post that carries the source term to the target — across *every* post type the taxonomy
+   * is attached to — then delete the source. WordPress has no native term-merge endpoint, so this
+   * is a non-atomic compose of core REST calls.
+   *
+   * Why cross-type: `deleteTerm` force-deletes (terms have no trash), severing *all* of the source
+   * term's relationships. If only one post type were re-assigned, posts of any other type would
+   * lose the term without gaining the target. So this scans all of the taxonomy's post types.
+   *
+   * The source is deleted only on a fully clean merge: every reachable type fully paged (no
+   * {@link MAX_MERGE_PAGES} cap hit, no type unaddressable over REST) and every re-assignment
+   * succeeded. Otherwise it is kept (`deleted: false`) so the caller can surface the partial
+   * result and re-run — re-running re-queries the source's remaining posts (idempotent-ish). The
+   * caller must reject merging a term that has children (WordPress would reparent them on delete);
+   * this method does not enforce that. A core REST call — no companion plugin needed.
+   */
+  async mergeTerm(taxRestBase: string, fromId: number, toId: number): Promise<MergeTermResult> {
+    assertRouteSegment(taxRestBase);
+    assertTermId(fromId);
+    assertTermId(toId);
+    if (fromId === toId) {
+      throw new Error('Cannot merge a term into itself.');
+    }
+
+    // Resolve the REST bases of every post type this taxonomy applies to. A taxonomy type with no
+    // REST-addressable post type cannot be re-assigned, so the merge cannot be guaranteed complete.
+    const taxonomies = await this.listTaxonomies();
+    const tax = taxonomies.find((t) => t.restBase === taxRestBase);
+    if (!tax) {
+      throw new Error(`Unknown taxonomy: ${taxRestBase}`);
+    }
+    const postTypes = await this.listPostTypes();
+    const restBases: string[] = [];
+    let truncated = false;
+    for (const slug of tax.types) {
+      const pt = postTypes.find((p) => p.slug === slug);
+      if (pt) {
+        restBases.push(pt.restBase);
+      } else {
+        // Attached to a type we cannot reach over REST: cannot fully reassign, so keep the source.
+        truncated = true;
+      }
+    }
+    // No reachable post type at all (e.g. the taxonomies response reported no `types`): we cannot
+    // know what carries the source term, so refuse to delete it — deleting now would sever any
+    // hidden assignments with nothing re-assigned, the exact data loss this method exists to avoid.
+    if (restBases.length === 0) {
+      truncated = true;
+    }
+
+    // Phase A — snapshot every post carrying the source term, reading (not mutating) so forward
+    // paging is stable. (Re-assigning shrinks the filtered set, which would shift pages mid-scan.)
+    const targets: { type: string; post: WpPost }[] = [];
+    for (const type of restBases) {
+      let page = 1;
+      for (;;) {
+        if (page > MAX_MERGE_PAGES) {
+          // Too many pages to enumerate safely: keep the source rather than delete with stragglers.
+          truncated = true;
+          break;
+        }
+        const { items, totalPages, pagesReliable } = await this.listPostsByTerm(
+          type,
+          taxRestBase,
+          fromId,
+          { page, perPage: 100 },
+        );
+        for (const post of items) {
+          targets.push({ type, post });
+        }
+        // With a trustworthy page count, stop at the last page; without one, trust only a short
+        // (non-full) page as the end — never a defaulted "1 page" that could hide later pages.
+        const finished = pagesReliable ? page >= totalPages : items.length < 100;
+        if (finished) {
+          break;
+        }
+        page += 1;
+      }
+    }
+
+    // Phase B — re-assign each snapshotted post from the source term to the target.
+    let reassigned = 0;
+    const failed: { id: number; error: string }[] = [];
+    for (const { type, post } of targets) {
+      const current = post.terms[taxRestBase] ?? [];
+      const next = computeMergedTermIds(current, fromId, toId);
+      try {
+        await this.updatePost(post.id, { terms: { [taxRestBase]: next } }, type);
+        reassigned += 1;
+      } catch (e) {
+        failed.push({ id: post.id, error: e instanceof Error ? e.message : String(e) });
+      }
+    }
+
+    // Delete the source only when the merge is provably complete and clean.
+    let deleted = false;
+    if (failed.length === 0 && !truncated) {
+      await this.deleteTerm(taxRestBase, fromId);
+      deleted = true;
+    }
+    return { reassigned, failed, deleted, truncated };
+  }
+
+  /**
    * Resolve specific term ids to their names in one request per 100 ids (`?include=`), used to
    * label the taxonomy columns for the posts currently shown. A core REST call — no plugin needed.
    */
@@ -698,6 +884,15 @@ export class WpClient {
     }
     return out;
   }
+}
+
+/**
+ * Compute a post's taxonomy term IDs after merging `fromId` into `toId`: drop the source, add the
+ * target, and de-duplicate (the post may already carry the target). Order-preserving for the
+ * surviving ids. Pure — the merge decision for one post, unit-testable without the network.
+ */
+export function computeMergedTermIds(currentIds: number[], fromId: number, toId: number): number[] {
+  return [...new Set(currentIds.filter((id) => id !== fromId).concat(toId))];
 }
 
 /** Map editable fields to the WordPress REST request body (camelCase → snake_case). */
@@ -1012,6 +1207,8 @@ export function normalizeTaxonomies(raw: unknown): WpTaxonomy[] {
       restBase: entry.rest_base,
       name: typeof entry.name === 'string' ? entry.name : key,
       hierarchical: entry.hierarchical === true,
+      // The post types this taxonomy applies to; a term merge re-assigns across all of them.
+      types: Array.isArray(entry.types) ? entry.types.filter((t): t is string => typeof t === 'string') : [],
     });
   }
   return result;

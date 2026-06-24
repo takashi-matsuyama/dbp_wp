@@ -13,7 +13,15 @@ import type {
   TermListResult,
   UpdateResult,
 } from './api.types';
-import type { WpMedia, WpPost, WpPostEdit, WpPostType, WpTaxonomy, WpTerm } from '@dbp-wp/core';
+import type {
+  MergeTermResult,
+  WpMedia,
+  WpPost,
+  WpPostEdit,
+  WpPostType,
+  WpTaxonomy,
+  WpTerm,
+} from '@dbp-wp/core';
 
 // The CLI-backed data layer. The UI talks only to the local CLI server (`/api/...`), never
 // to WordPress directly, so the browser never holds credentials and is not subject to
@@ -430,6 +438,29 @@ export async function deleteTerm(taxonomy: string, id: number): Promise<void> {
     const data = (await res.json().catch(() => ({}))) as { error?: string };
     throw new Error(data.error ?? `Delete term failed: ${res.status}`);
   }
+}
+
+/** Merge the source term into the target across the taxonomy's post types, then delete the source. */
+export async function mergeTerm(
+  taxonomy: string,
+  fromId: number,
+  toId: number,
+): Promise<MergeTermResult> {
+  const res = await fetch(`/api/terms/${fromId}/merge?taxonomy=${encodeURIComponent(taxonomy)}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ into: toId }),
+  });
+  const data = (await res.json().catch(() => ({}))) as Partial<MergeTermResult> & { error?: string };
+  if (!res.ok) {
+    throw new Error(data.error ?? `Merge term failed: ${res.status}`);
+  }
+  return {
+    reassigned: typeof data.reassigned === 'number' ? data.reassigned : 0,
+    failed: Array.isArray(data.failed) ? data.failed : [],
+    deleted: data.deleted === true,
+    truncated: data.truncated === true,
+  };
 }
 
 /** Resolve specific term ids to their names (to label the taxonomy columns in the grid). */

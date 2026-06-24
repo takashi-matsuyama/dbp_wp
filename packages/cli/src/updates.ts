@@ -180,6 +180,28 @@ export function parseTermUpdate(body: unknown): TermUpdate | null {
   return result;
 }
 
+/** A validated term-merge request: the target term the source is merged into. */
+export interface TermMerge {
+  /** Target term ID the source term's assignments are moved to. */
+  into: number;
+}
+
+/**
+ * Validate a term-merge payload (`{ into }`) from untrusted input — the source term id rides the
+ * path and the taxonomy the query string, mirroring the term update/delete routes. `into` must be
+ * a positive safe integer. Returns null on any malformed shape. A core REST call — no plugin.
+ */
+export function parseTermMerge(body: unknown): TermMerge | null {
+  if (typeof body !== 'object' || body === null) {
+    return null;
+  }
+  const record = body as Record<string, unknown>;
+  if (typeof record.into !== 'number' || !Number.isSafeInteger(record.into) || record.into <= 0) {
+    return null;
+  }
+  return { into: record.into };
+}
+
 /**
  * Validate a taxonomy-terms map (`{ <restBase>: number[] }`) from untrusted input. Each key
  * must be a valid REST route slug and each value an array of positive integer term IDs (an empty

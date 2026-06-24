@@ -1,4 +1,5 @@
 import type {
+  MergeTermResult,
   PrintRecord,
   WpMedia,
   WpPost,
@@ -467,7 +468,7 @@ export function fetchTaxonomies(type: string): Promise<WpTaxonomy[]> {
     return Promise.resolve([]);
   }
   return Promise.resolve([
-    { slug: 'topic', restBase: TOPICS_REST_BASE, name: 'Topics', hierarchical: true },
+    { slug: 'topic', restBase: TOPICS_REST_BASE, name: 'Topics', hierarchical: true, types: [COUNTRY_TYPE] },
   ]);
 }
 
@@ -567,4 +568,38 @@ export function deleteTerm(taxonomy: string, id: number): Promise<void> {
     if (ids) r.terms[TOPICS_REST_BASE] = ids.filter((x) => x !== id);
   }
   return Promise.resolve();
+}
+
+export function mergeTerm(
+  taxonomy: string,
+  fromId: number,
+  toId: number,
+): Promise<MergeTermResult> {
+  if (taxonomy !== TOPICS_REST_BASE) {
+    return Promise.reject(new Error('Unknown taxonomy in demo data'));
+  }
+  if (fromId === toId) {
+    return Promise.reject(new Error('Cannot merge a term into itself.'));
+  }
+  const source = DEMO_TERMS.find((t) => t.id === fromId);
+  const target = DEMO_TERMS.find((t) => t.id === toId);
+  if (!source || !target) {
+    return Promise.reject(new Error('Term not found'));
+  }
+  // Re-assign every demo record carrying the source topic to the target (de-duplicated).
+  let reassigned = 0;
+  for (const r of store) {
+    const ids = r.terms[TOPICS_REST_BASE];
+    if (ids && ids.includes(fromId)) {
+      r.terms[TOPICS_REST_BASE] = [...new Set(ids.filter((x) => x !== fromId).concat(toId))];
+      reassigned += 1;
+    }
+  }
+  // Delete the source term, mirroring deleteTerm: children reparent to the source's parent.
+  const parentOfRemoved = source.parent;
+  for (const t of DEMO_TERMS) {
+    if (t.parent === fromId) t.parent = parentOfRemoved;
+  }
+  DEMO_TERMS.splice(DEMO_TERMS.indexOf(source), 1);
+  return Promise.resolve({ reassigned, failed: [], deleted: true, truncated: false });
 }

@@ -1,4 +1,5 @@
 import type {
+  MergeTermResult,
   PrintRecord,
   WpMedia,
   WpPost,
@@ -180,4 +181,10 @@ export interface ApiImpl {
   ): Promise<WpTerm>;
   /** Delete a term (force-delete; terms have no trash). Core REST. */
   deleteTerm(taxonomy: string, id: number): Promise<void>;
+  /**
+   * Merge the source term into the target across every post type the taxonomy applies to, then
+   * delete the source (only on a fully clean merge). The caller must block merging a term that has
+   * children. Core REST — no companion plugin. Returns the per-post outcome.
+   */
+  mergeTerm(taxonomy: string, fromId: number, toId: number): Promise<MergeTermResult>;
 }

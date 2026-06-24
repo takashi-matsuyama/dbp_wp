@@ -15,6 +15,7 @@ import {
   parseRelation,
   parseSinglePostSave,
   parseTermCreate,
+  parseTermMerge,
   parseTermUpdate,
 } from './updates';
 
@@ -42,6 +43,10 @@ const SINGLE_POST_PATH = /^\/api\/posts\/(\d+)$/;
 /** Matches `/api/terms/<id>` (term update/delete in the taxonomy manager), capturing the id.
  *  Digits only, so it never shadows the `/api/terms` list/create endpoint. */
 const SINGLE_TERM_PATH = /^\/api\/terms\/(\d+)$/;
+
+/** Matches `/api/terms/<id>/merge` (merge the source term into another), capturing the source id.
+ *  Checked before {@link SINGLE_TERM_PATH}, which anchors on `$` and so never matches this. */
+const MERGE_TERM_PATH = /^\/api\/terms\/(\d+)\/merge$/;
 
 /** Mutable connection state, held in memory only (never written to disk). */
 export interface ConnectionState {
@@ -1107,6 +1112,71 @@ async function handleSingleTerm(
   }
 }
 
+/**
+ * Merge one taxonomy term into another (`POST /api/terms/<id>/merge?taxonomy=<restBase>` with
+ * `{ into }`). Re-assigns the source term's posts to the target across every post type the taxonomy
+ * applies to, then deletes the source (only on a fully clean merge). Core REST — no companion
+ * plugin; WordPress enforces the caller's term-management capability, so a 403 is surfaced as such.
+ */
+async function handleTermMerge(
+  req: IncomingMessage,
+  res: ServerResponse,
+  url: URL,
+  options: ServerOptions,
+  id: number,
+): Promise<void> {
+  if (req.method !== 'POST') {
+    sendJson(res, 405, { error: 'Method not allowed' });
+    return;
+  }
+  if (!Number.isSafeInteger(id) || id <= 0) {
+    sendJson(res, 400, { error: 'Invalid term id.' });
+    return;
+  }
+  const credentials = options.state.credentials;
+  if (!credentials) {
+    sendJson(res, 409, { error: 'Not connected' });
+    return;
+  }
+  const taxonomy = url.searchParams.get('taxonomy');
+  if (taxonomy === null || !/^[a-z0-9_-]+$/i.test(taxonomy)) {
+    sendJson(res, 400, { error: 'Invalid or missing taxonomy.' });
+    return;
+  }
+  if (!isJsonContentType(req.headers['content-type'])) {
+    sendJson(res, 415, { error: 'Content-Type must be application/json.' });
+    return;
+  }
+  let body: unknown;
+  try {
+    body = await readJsonBody(req);
+  } catch (e) {
+    sendJson(res, 400, { error: e instanceof Error ? e.message : 'Invalid request body' });
+    return;
+  }
+  const merge = parseTermMerge(body);
+  if (!merge) {
+    sendJson(res, 400, { error: 'Invalid term merge payload.' });
+    return;
+  }
+  if (merge.into === id) {
+    sendJson(res, 400, { error: 'Cannot merge a term into itself.' });
+    return;
+  }
+  try {
+    const result = await new WpClient(credentials).mergeTerm(taxonomy, id, merge.into);
+    sendJson(res, 200, result);
+  } catch (e) {
+    if (!res.headersSent) {
+      if (e instanceof WpRequestError && e.status === 403) {
+        sendJson(res, 403, { error: 'You do not have permission to merge terms in this taxonomy.' });
+      } else {
+        sendJson(res, 502, { error: e instanceof Error ? e.message : 'Term merge failed' });
+      }
+    }
+  }
+}
+
 async function handleApiRoutes(
   req: IncomingMessage,
   res: ServerResponse,
@@ -1155,6 +1225,11 @@ async function handleApiRoutes(
   }
   if (url.pathname === '/api/terms') {
     await handleTerms(req, res, url, options);
+    return;
+  }
+  const mergeTerm = MERGE_TERM_PATH.exec(url.pathname);
+  if (mergeTerm) {
+    await handleTermMerge(req, res, url, options, Number.parseInt(mergeTerm[1] ?? '', 10));
     return;
   }
   const singleTerm = SINGLE_TERM_PATH.exec(url.pathname);
