@@ -14,8 +14,9 @@
   import ImportView from './lib/views/ImportView.svelte';
   import PrintView from './lib/views/PrintView.svelte';
   import EditView from './lib/views/EditView.svelte';
+  import TaxonomyManageView from './lib/views/TaxonomyManageView.svelte';
 
-  type Tab = 'table' | 'spreadsheet' | 'import' | 'print';
+  type Tab = 'table' | 'spreadsheet' | 'import' | 'print' | 'taxonomies';
 
   let tab = $state<Tab>('table');
   // The single post whose body is being edited (opened from the spreadsheet), or null. When
@@ -119,6 +120,10 @@
       <button class:active={tab === 'print' && !editing} onclick={() => selectTab('print')}
         >Print</button
       >
+      <button
+        class:active={tab === 'taxonomies' && !editing}
+        onclick={() => selectTab('taxonomies')}>Taxonomies</button
+      >
     </nav>
     {#if postTypes.length > 0}
       <label class="type-select">
@@ -191,9 +196,13 @@
         onimported={refresh}
       />
     {/key}
-  {:else}
+  {:else if tab === 'print'}
     {#key selectedType}
       <PrintView type={selectedType} connectorAvailable={connection.connectorAvailable} />
+    {/key}
+  {:else}
+    {#key `${connection.siteUrl ?? ''}:${selectedType}`}
+      <TaxonomyManageView type={selectedType} onchanged={refresh} />
     {/key}
   {/if}
 </main>

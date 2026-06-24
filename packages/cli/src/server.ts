@@ -15,6 +15,7 @@ import {
   parseRelation,
   parseSinglePostSave,
   parseTermCreate,
+  parseTermUpdate,
 } from './updates';
 
 const MIME: Record<string, string> = {
@@ -37,6 +38,10 @@ const MAX_MEDIA_BYTES = 25_000_000;
 /** Matches `/api/posts/<id>` (single-post editor), capturing the numeric id. Digits only,
  *  so it never shadows `/api/posts/batch|import|meta` or the `/api/posts` listing. */
 const SINGLE_POST_PATH = /^\/api\/posts\/(\d+)$/;
+
+/** Matches `/api/terms/<id>` (term update/delete in the taxonomy manager), capturing the id.
+ *  Digits only, so it never shadows the `/api/terms` list/create endpoint. */
+const SINGLE_TERM_PATH = /^\/api\/terms\/(\d+)$/;
 
 /** Mutable connection state, held in memory only (never written to disk). */
 export interface ConnectionState {
@@ -1019,6 +1024,89 @@ async function handleTerms(
   }
 }
 
+/**
+ * Update (PATCH) or delete (DELETE) one taxonomy term in the manager. `?taxonomy=<restBase>` is
+ * required (to build the term route). Core REST; WordPress enforces the caller's term-management
+ * capability, so a 403 is surfaced as such. Delete uses `force=true` (terms have no trash).
+ */
+async function handleSingleTerm(
+  req: IncomingMessage,
+  res: ServerResponse,
+  url: URL,
+  options: ServerOptions,
+  id: number,
+): Promise<void> {
+  if (req.method !== 'PATCH' && req.method !== 'DELETE') {
+    sendJson(res, 405, { error: 'Method not allowed' });
+    return;
+  }
+  if (!Number.isSafeInteger(id) || id <= 0) {
+    sendJson(res, 400, { error: 'Invalid term id.' });
+    return;
+  }
+  const credentials = options.state.credentials;
+  if (!credentials) {
+    sendJson(res, 409, { error: 'Not connected' });
+    return;
+  }
+  const taxonomy = url.searchParams.get('taxonomy');
+  if (taxonomy === null || !/^[a-z0-9_-]+$/i.test(taxonomy)) {
+    sendJson(res, 400, { error: 'Invalid or missing taxonomy.' });
+    return;
+  }
+  const client = new WpClient(credentials);
+
+  if (req.method === 'DELETE') {
+    try {
+      await client.deleteTerm(taxonomy, id);
+      sendJson(res, 200, { deleted: true });
+    } catch (e) {
+      if (!res.headersSent) {
+        if (e instanceof WpRequestError && e.status === 403) {
+          sendJson(res, 403, { error: 'You do not have permission to delete terms in this taxonomy.' });
+        } else {
+          sendJson(res, 502, { error: e instanceof Error ? e.message : 'Term deletion failed' });
+        }
+      }
+    }
+    return;
+  }
+
+  // PATCH (update)
+  if (!isJsonContentType(req.headers['content-type'])) {
+    sendJson(res, 415, { error: 'Content-Type must be application/json.' });
+    return;
+  }
+  let body: unknown;
+  try {
+    body = await readJsonBody(req);
+  } catch (e) {
+    sendJson(res, 400, { error: e instanceof Error ? e.message : 'Invalid request body' });
+    return;
+  }
+  const update = parseTermUpdate(body);
+  if (!update) {
+    sendJson(res, 400, { error: 'Invalid term update payload.' });
+    return;
+  }
+  if (update.parent === id) {
+    sendJson(res, 400, { error: 'A term cannot be its own parent.' });
+    return;
+  }
+  try {
+    const term = await client.updateTerm(taxonomy, id, update);
+    sendJson(res, 200, { term });
+  } catch (e) {
+    if (!res.headersSent) {
+      if (e instanceof WpRequestError && e.status === 403) {
+        sendJson(res, 403, { error: 'You do not have permission to edit terms in this taxonomy.' });
+      } else {
+        sendJson(res, 502, { error: e instanceof Error ? e.message : 'Term update failed' });
+      }
+    }
+  }
+}
+
 async function handleApiRoutes(
   req: IncomingMessage,
   res: ServerResponse,
@@ -1067,6 +1155,11 @@ async function handleApiRoutes(
   }
   if (url.pathname === '/api/terms') {
     await handleTerms(req, res, url, options);
+    return;
+  }
+  const singleTerm = SINGLE_TERM_PATH.exec(url.pathname);
+  if (singleTerm) {
+    await handleSingleTerm(req, res, url, options, Number.parseInt(singleTerm[1] ?? '', 10));
     return;
   }
   const singlePost = SINGLE_POST_PATH.exec(url.pathname);

@@ -34,3 +34,5 @@ export const fetchTerms = impl.fetchTerms;
 export const fetchAllTerms = impl.fetchAllTerms;
 export const resolveTerms = impl.resolveTerms;
 export const createTerm = impl.createTerm;
+export const updateTerm = impl.updateTerm;
+export const deleteTerm = impl.deleteTerm;

@@ -40,12 +40,12 @@ const REGION_TYPE = 'regions';
  *  Hierarchical, with a couple of nested terms, to exercise the tree picker + term creation. */
 const TOPICS_REST_BASE = 'topics';
 const DEMO_TERMS: WpTerm[] = [
-  { id: 1, name: 'Economy', parent: 0 },
-  { id: 2, name: 'Trade', parent: 1 },
-  { id: 3, name: 'Finance', parent: 1 },
-  { id: 4, name: 'Geography', parent: 0 },
-  { id: 5, name: 'Culture', parent: 0 },
-  { id: 6, name: 'Environment', parent: 0 },
+  { id: 1, name: 'Economy', parent: 0, count: 0 },
+  { id: 2, name: 'Trade', parent: 1, count: 0 },
+  { id: 3, name: 'Finance', parent: 1, count: 0 },
+  { id: 4, name: 'Geography', parent: 0, count: 0 },
+  { id: 5, name: 'Culture', parent: 0, count: 0 },
+  { id: 6, name: 'Environment', parent: 0, count: 0 },
 ];
 let nextTermId = 7;
 
@@ -508,7 +508,14 @@ export function fetchAllTerms(
   }
   const search = query?.search?.trim().toLowerCase();
   const items = search ? DEMO_TERMS.filter((t) => t.name.toLowerCase().includes(search)) : DEMO_TERMS;
-  return Promise.resolve({ items: items.map((t) => ({ ...t })), truncated: false });
+  // Surface a live assignment count so the manager's delete-impact warning is meaningful in demo.
+  return Promise.resolve({ items: items.map(withTopicCount), truncated: false });
+}
+
+/** Count how many demo records are assigned a topic term (for the delete-impact warning). */
+function withTopicCount(term: WpTerm): WpTerm {
+  const count = store.filter((r) => (r.terms[TOPICS_REST_BASE] ?? []).includes(term.id)).length;
+  return { ...term, count };
 }
 
 export function createTerm(
@@ -518,7 +525,46 @@ export function createTerm(
   if (taxonomy !== TOPICS_REST_BASE) {
     return Promise.reject(new Error('Unknown taxonomy in demo data'));
   }
-  const term: WpTerm = { id: nextTermId++, name: input.name, parent: input.parent ?? 0 };
+  const term: WpTerm = { id: nextTermId++, name: input.name, parent: input.parent ?? 0, count: 0 };
   DEMO_TERMS.push(term);
   return Promise.resolve({ ...term });
+}
+
+export function updateTerm(
+  taxonomy: string,
+  id: number,
+  input: { name?: string; parent?: number; slug?: string; description?: string },
+): Promise<WpTerm> {
+  if (taxonomy !== TOPICS_REST_BASE) {
+    return Promise.reject(new Error('Unknown taxonomy in demo data'));
+  }
+  const term = DEMO_TERMS.find((t) => t.id === id);
+  if (!term) {
+    return Promise.reject(new Error('Term not found'));
+  }
+  if (input.name !== undefined) term.name = input.name;
+  if (input.parent !== undefined) term.parent = input.parent;
+  return Promise.resolve(withTopicCount(term));
+}
+
+export function deleteTerm(taxonomy: string, id: number): Promise<void> {
+  if (taxonomy !== TOPICS_REST_BASE) {
+    return Promise.reject(new Error('Unknown taxonomy in demo data'));
+  }
+  const term = DEMO_TERMS.find((t) => t.id === id);
+  if (!term) {
+    return Promise.reject(new Error('Term not found'));
+  }
+  // Mirror WordPress: children are reparented to the deleted term's parent.
+  const parentOfRemoved = term.parent;
+  for (const t of DEMO_TERMS) {
+    if (t.parent === id) t.parent = parentOfRemoved;
+  }
+  DEMO_TERMS.splice(DEMO_TERMS.indexOf(term), 1);
+  // Drop the term from any post assignments so the demo store stays consistent.
+  for (const r of store) {
+    const ids = r.terms[TOPICS_REST_BASE];
+    if (ids) r.terms[TOPICS_REST_BASE] = ids.filter((x) => x !== id);
+  }
+  return Promise.resolve();
 }

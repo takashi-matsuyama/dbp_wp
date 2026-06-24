@@ -172,4 +172,12 @@ export interface ApiImpl {
   resolveTerms(taxonomy: string, ids: number[]): Promise<WpTerm[]>;
   /** Create a new taxonomy term, optionally under a parent (hierarchical). Core REST. */
   createTerm(taxonomy: string, input: { name: string; parent?: number }): Promise<WpTerm>;
+  /** Update a term (rename, reparent, slug/description) in the taxonomy manager. Core REST. */
+  updateTerm(
+    taxonomy: string,
+    id: number,
+    input: { name?: string; parent?: number; slug?: string; description?: string },
+  ): Promise<WpTerm>;
+  /** Delete a term (force-delete; terms have no trash). Core REST. */
+  deleteTerm(taxonomy: string, id: number): Promise<void>;
 }

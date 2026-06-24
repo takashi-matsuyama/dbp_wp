@@ -176,6 +176,8 @@ export interface WpTerm {
   name: string;
   /** Parent term ID for a hierarchical taxonomy; `0` (or absent) for a top-level/flat term. */
   parent: number;
+  /** Number of posts assigned this term, for the management view's delete-impact warning. */
+  count: number;
 }
 
 /** Parameters for listing taxonomy terms. */

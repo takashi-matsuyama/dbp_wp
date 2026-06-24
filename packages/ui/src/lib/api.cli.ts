@@ -403,6 +403,35 @@ export async function createTerm(
   return data.term as WpTerm;
 }
 
+/** Update a term (rename/reparent/etc.) in the taxonomy manager. */
+export async function updateTerm(
+  taxonomy: string,
+  id: number,
+  input: { name?: string; parent?: number; slug?: string; description?: string },
+): Promise<WpTerm> {
+  const res = await fetch(`/api/terms/${id}?taxonomy=${encodeURIComponent(taxonomy)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  });
+  const data = (await res.json().catch(() => ({}))) as { term?: WpTerm; error?: string };
+  if (!res.ok) {
+    throw new Error(data.error ?? `Update term failed: ${res.status}`);
+  }
+  return data.term as WpTerm;
+}
+
+/** Delete a term (force-delete; terms have no trash). */
+export async function deleteTerm(taxonomy: string, id: number): Promise<void> {
+  const res = await fetch(`/api/terms/${id}?taxonomy=${encodeURIComponent(taxonomy)}`, {
+    method: 'DELETE',
+  });
+  if (!res.ok) {
+    const data = (await res.json().catch(() => ({}))) as { error?: string };
+    throw new Error(data.error ?? `Delete term failed: ${res.status}`);
+  }
+}
+
 /** Resolve specific term ids to their names (to label the taxonomy columns in the grid). */
 export async function resolveTerms(taxonomy: string, ids: number[]): Promise<WpTerm[]> {
   if (ids.length === 0) {

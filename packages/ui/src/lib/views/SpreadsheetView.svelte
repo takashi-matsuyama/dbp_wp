@@ -20,6 +20,7 @@
   } from '../api';
   import { computeMenuOrders } from '../formula';
   import { loadColumnSettings, saveColumnSettings } from '../settings';
+  import { flattenTermTree } from '../termTree';
 
   let {
     posts,
@@ -685,44 +686,7 @@
     if (!isHierarchical) {
       return [];
     }
-    const filter = termFilter.trim().toLowerCase();
-    if (filter !== '') {
-      return termItems
-        .filter((t) => t.name.toLowerCase().includes(filter))
-        .map((term) => ({ term, depth: 0 }));
-    }
-    const ids = new Set(termItems.map((t) => t.id));
-    const byParent = new Map<number, WpTerm[]>();
-    for (const t of termItems) {
-      const parent = ids.has(t.parent) ? t.parent : 0; // orphans render as roots
-      const list = byParent.get(parent);
-      if (list) {
-        list.push(t);
-      } else {
-        byParent.set(parent, [t]);
-      }
-    }
-    const rows: Array<{ term: WpTerm; depth: number }> = [];
-    const seen = new Set<number>();
-    const visit = (parentId: number, depth: number): void => {
-      for (const t of byParent.get(parentId) ?? []) {
-        if (seen.has(t.id)) {
-          continue;
-        }
-        seen.add(t.id);
-        rows.push({ term: t, depth });
-        visit(t.id, depth + 1);
-      }
-    };
-    visit(0, 0);
-    // Any term unreachable from a root (e.g. a closed parent cycle) still appears, as a root, so
-    // nothing silently vanishes from the picker.
-    for (const t of termItems) {
-      if (!seen.has(t.id)) {
-        rows.push({ term: t, depth: 0 });
-      }
-    }
-    return rows;
+    return flattenTermTree(termItems, termFilter);
   });
 
   async function loadTerms(): Promise<void> {

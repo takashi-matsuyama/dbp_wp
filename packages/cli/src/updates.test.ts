@@ -8,6 +8,7 @@ import {
   parseRelation,
   parseSinglePostSave,
   parseTermCreate,
+  parseTermUpdate,
 } from './updates';
 
 describe('parseBatchUpdates', () => {
@@ -276,6 +277,38 @@ describe('parseTermCreate', () => {
     expect(parseTermCreate({ taxonomy: 'categories', name: 'X', parent: -1 })).toBeNull();
     expect(parseTermCreate({ taxonomy: 'categories', name: 'X', parent: 1.5 })).toBeNull();
     expect(parseTermCreate(null)).toBeNull();
+  });
+});
+
+describe('parseTermUpdate', () => {
+  it('parses a rename', () => {
+    expect(parseTermUpdate({ name: '  News  ' })).toEqual({ name: 'News' });
+  });
+
+  it('parses a reparent, keeping parent 0 (move to top level)', () => {
+    expect(parseTermUpdate({ parent: 5 })).toEqual({ parent: 5 });
+    expect(parseTermUpdate({ parent: 0 })).toEqual({ parent: 0 });
+  });
+
+  it('parses slug and description', () => {
+    expect(parseTermUpdate({ slug: 'news-2024', description: 'Latest' })).toEqual({
+      slug: 'news-2024',
+      description: 'Latest',
+    });
+  });
+
+  it('rejects an empty change set', () => {
+    expect(parseTermUpdate({})).toBeNull();
+    expect(parseTermUpdate(null)).toBeNull();
+  });
+
+  it('rejects an empty name, negative/fractional parent, or bad slug', () => {
+    expect(parseTermUpdate({ name: '   ' })).toBeNull();
+    expect(parseTermUpdate({ name: 5 })).toBeNull();
+    expect(parseTermUpdate({ parent: -1 })).toBeNull();
+    expect(parseTermUpdate({ parent: 1.5 })).toBeNull();
+    expect(parseTermUpdate({ slug: 'bad slug' })).toBeNull();
+    expect(parseTermUpdate({ description: 5 })).toBeNull();
   });
 });
 

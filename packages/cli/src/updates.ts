@@ -125,6 +125,61 @@ export function parseTermCreate(body: unknown): TermCreate | null {
   return result;
 }
 
+/** A validated term-update request (only the provided fields are changed). */
+export interface TermUpdate {
+  name?: string;
+  parent?: number;
+  slug?: string;
+  description?: string;
+}
+
+/**
+ * Validate a term-update payload (`{ name?, parent?, slug?, description? }`) from untrusted input.
+ * `name` (when present) must be a non-empty trimmed string; `parent` a non-negative safe integer
+ * (`0` moves the term to the top level); `slug` a valid REST slug; `description` a string. Returns
+ * null on any malformed shape, or when nothing would change. A core REST call — no companion plugin.
+ */
+export function parseTermUpdate(body: unknown): TermUpdate | null {
+  if (typeof body !== 'object' || body === null) {
+    return null;
+  }
+  const record = body as Record<string, unknown>;
+  const result: TermUpdate = {};
+  if (record.name !== undefined) {
+    if (typeof record.name !== 'string' || record.name.trim() === '') {
+      return null;
+    }
+    result.name = record.name.trim();
+  }
+  if (record.parent !== undefined) {
+    if (
+      typeof record.parent !== 'number' ||
+      !Number.isSafeInteger(record.parent) ||
+      record.parent < 0
+    ) {
+      return null;
+    }
+    result.parent = record.parent;
+  }
+  if (record.slug !== undefined) {
+    if (typeof record.slug !== 'string' || !ROUTE_SLUG.test(record.slug)) {
+      return null;
+    }
+    result.slug = record.slug;
+  }
+  if (record.description !== undefined) {
+    if (typeof record.description !== 'string') {
+      return null;
+    }
+    result.description = record.description;
+  }
+  // Require at least one field to change.
+  if (Object.keys(result).length === 0) {
+    return null;
+  }
+  return result;
+}
+
 /**
  * Validate a taxonomy-terms map (`{ <restBase>: number[] }`) from untrusted input. Each key
  * must be a valid REST route slug and each value an array of positive integer term IDs (an empty

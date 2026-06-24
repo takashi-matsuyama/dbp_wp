@@ -638,6 +638,42 @@ export class WpClient {
   }
 
   /**
+   * Update a term (`POST /wp/v2/<taxRestBase>/<id>`): rename (`name`), reparent (`parent`, `0`
+   * moves it to top level), or set `slug`/`description`. Only provided fields are sent. WordPress
+   * enforces the caller's capability (a 403 surfaces) and rejects an invalid parent (e.g. a cycle).
+   * A core REST call — no companion plugin.
+   */
+  async updateTerm(
+    taxRestBase: string,
+    id: number,
+    input: { name?: string; parent?: number; slug?: string; description?: string },
+  ): Promise<WpTerm> {
+    assertRouteSegment(taxRestBase);
+    assertTermId(id);
+    const body: Record<string, unknown> = {};
+    if (input.name !== undefined) body.name = input.name;
+    if (input.parent !== undefined) body.parent = input.parent;
+    if (input.slug !== undefined) body.slug = input.slug;
+    if (input.description !== undefined) body.description = input.description;
+    const raw = await this.request<unknown>(`/wp/v2/${taxRestBase}/${id}?context=edit`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    });
+    return normalizeTerm(raw);
+  }
+
+  /**
+   * Delete a term (`DELETE /wp/v2/<taxRestBase>/<id>?force=true`). Terms have no trash, so WordPress
+   * requires `force=true`; its children are reparented to the deleted term's parent (WordPress
+   * behavior). WordPress enforces the caller's capability (a 403 surfaces). A core REST call.
+   */
+  async deleteTerm(taxRestBase: string, id: number): Promise<void> {
+    assertRouteSegment(taxRestBase);
+    assertTermId(id);
+    await this.send(`/wp/v2/${taxRestBase}/${id}?force=true&context=edit`, { method: 'DELETE' });
+  }
+
+  /**
    * Resolve specific term ids to their names in one request per 100 ids (`?include=`), used to
    * label the taxonomy columns for the posts currently shown. A core REST call — no plugin needed.
    */
@@ -707,6 +743,12 @@ function assertRouteSegment(segment: string): void {
 function assertPostId(id: number): void {
   if (!Number.isSafeInteger(id) || id <= 0) {
     throw new Error(`Invalid post id: ${id}`);
+  }
+}
+
+function assertTermId(id: number): void {
+  if (!Number.isSafeInteger(id) || id <= 0) {
+    throw new Error(`Invalid term id: ${id}`);
   }
 }
 
@@ -985,6 +1027,7 @@ export function normalizeTerm(raw: unknown): WpTerm {
     id: typeof obj.id === 'number' ? obj.id : 0,
     name: typeof obj.name === 'string' ? obj.name : '',
     parent: typeof obj.parent === 'number' ? obj.parent : 0,
+    count: typeof obj.count === 'number' ? obj.count : 0,
   };
 }
 

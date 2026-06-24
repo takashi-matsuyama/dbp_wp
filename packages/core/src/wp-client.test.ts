@@ -407,17 +407,18 @@ describe('normalizeTaxonomies', () => {
 });
 
 describe('normalizeTerm', () => {
-  it('extracts id, name, and parent', () => {
-    expect(normalizeTerm({ id: 5, name: 'News', parent: 2, slug: 'news' })).toEqual({
+  it('extracts id, name, parent, and count', () => {
+    expect(normalizeTerm({ id: 5, name: 'News', parent: 2, count: 12, slug: 'news' })).toEqual({
       id: 5,
       name: 'News',
       parent: 2,
+      count: 12,
     });
   });
 
   it('degrades malformed input to safe defaults', () => {
-    expect(normalizeTerm(null)).toEqual({ id: 0, name: '', parent: 0 });
-    expect(normalizeTerm({ id: 'x' })).toEqual({ id: 0, name: '', parent: 0 });
+    expect(normalizeTerm(null)).toEqual({ id: 0, name: '', parent: 0, count: 0 });
+    expect(normalizeTerm({ id: 'x' })).toEqual({ id: 0, name: '', parent: 0, count: 0 });
   });
 });
 
