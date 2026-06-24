@@ -1,7 +1,8 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, tick } from 'svelte';
   import { renderMarkdown } from '@dbp-wp/core';
   import { fetchPost, savePostBody } from '../api';
+  import { applyInline, applyBlock, textStats, type InlineKind, type BlockKind } from '../editorOps';
 
   let {
     id,
@@ -41,6 +42,12 @@
   let savedMode = $state<Mode>('html');
   let confirmingDiscard = $state(false);
 
+  // Toolbar/shortcut plumbing: refs to the two textareas so formatting ops can read the live
+  // selection and restore it after rewriting the buffer. Only the active mode's textarea mounts.
+  let markdownEl = $state<HTMLTextAreaElement | null>(null);
+  let htmlEl = $state<HTMLTextAreaElement | null>(null);
+  let fullscreen = $state(false);
+
   function snapshot(): void {
     savedMarkdown = markdownText;
     savedHtml = htmlText;
@@ -50,6 +57,8 @@
   const dirty = $derived(
     mode !== savedMode || markdownText !== savedMarkdown || htmlText !== savedHtml,
   );
+
+  const stats = $derived(textStats(mode === 'markdown' ? markdownText : htmlText));
 
   async function load(): Promise<void> {
     loading = true;
@@ -155,6 +164,51 @@
     }
   }
 
+  function activeEl(): HTMLTextAreaElement | null {
+    return mode === 'markdown' ? markdownEl : htmlEl;
+  }
+
+  // Apply a toolbar transform to the active buffer using the live textarea selection, then restore
+  // focus and the returned selection so the user can keep typing. await tick() lets Svelte flush
+  // the new value to the DOM before we set the selection range.
+  async function runInline(kind: InlineKind): Promise<void> {
+    const el = activeEl();
+    if (!el) return;
+    const r = applyInline({ value: el.value, start: el.selectionStart, end: el.selectionEnd }, kind, mode);
+    if (mode === 'markdown') markdownText = r.value;
+    else htmlText = r.value;
+    await tick();
+    el.focus();
+    el.setSelectionRange(r.start, r.end);
+  }
+
+  async function runBlock(kind: BlockKind): Promise<void> {
+    const el = activeEl();
+    if (!el) return;
+    const r = applyBlock({ value: el.value, start: el.selectionStart, end: el.selectionEnd }, kind, mode);
+    if (mode === 'markdown') markdownText = r.value;
+    else htmlText = r.value;
+    await tick();
+    el.focus();
+    el.setSelectionRange(r.start, r.end);
+  }
+
+  // Editor shortcuts: Cmd/Ctrl+S saves, Cmd/Ctrl+B/I apply bold/italic. Other keys fall through.
+  function onEditorKeydown(e: KeyboardEvent): void {
+    if (!(e.metaKey || e.ctrlKey)) return;
+    const key = e.key.toLowerCase();
+    if (key === 's') {
+      e.preventDefault();
+      if (!saving && dirty) void save();
+    } else if (key === 'b') {
+      e.preventDefault();
+      void runInline('bold');
+    } else if (key === 'i') {
+      e.preventDefault();
+      void runInline('italic');
+    }
+  }
+
   function requestClose(): void {
     if (dirty) {
       confirmingDiscard = true;
@@ -168,7 +222,7 @@
   });
 </script>
 
-<div class="edit-view">
+<div class="edit-view" class:fullscreen>
   <section class="panel">
     <div class="edit-head">
       <button class="back" onclick={requestClose}>← Back to list</button>
@@ -213,16 +267,48 @@
         </p>
       {/if}
 
+      <div class="toolbar" role="toolbar" aria-label="Formatting">
+        <button type="button" title="Bold (Cmd/Ctrl+B)" disabled={saving} onclick={() => runInline('bold')}><b>B</b></button>
+        <button type="button" title="Italic (Cmd/Ctrl+I)" disabled={saving} onclick={() => runInline('italic')}><i>I</i></button>
+        <button type="button" class="mono" title="Inline code" disabled={saving} onclick={() => runInline('code')}>&lt;/&gt;</button>
+        <button type="button" title="Link" disabled={saving} onclick={() => runInline('link')}>🔗</button>
+        <span class="tb-sep" aria-hidden="true"></span>
+        <button type="button" title="Heading" disabled={saving} onclick={() => runBlock('heading')}>H2</button>
+        <button type="button" title="Bulleted list" disabled={saving} onclick={() => runBlock('list')}>☰</button>
+        <button type="button" title="Quote" disabled={saving} onclick={() => runBlock('quote')}>❝</button>
+        <span class="tb-spacer"></span>
+        <button
+          type="button"
+          class="tb-toggle"
+          title="Toggle full screen"
+          aria-pressed={fullscreen}
+          onclick={() => (fullscreen = !fullscreen)}>{fullscreen ? '⤡ Exit' : '⤢ Full'}</button
+        >
+      </div>
+
       {#if mode === 'markdown'}
         <label class="field">
           <span>Markdown source</span>
-          <textarea bind:value={markdownText} spellcheck="false" rows="18" disabled={saving}
+          <textarea
+            bind:this={markdownEl}
+            bind:value={markdownText}
+            onkeydown={onEditorKeydown}
+            spellcheck="false"
+            rows="18"
+            disabled={saving}
           ></textarea>
         </label>
       {:else}
         <label class="field">
           <span>Body (HTML)</span>
-          <textarea bind:value={htmlText} spellcheck="false" rows="18" disabled={saving}></textarea>
+          <textarea
+            bind:this={htmlEl}
+            bind:value={htmlText}
+            onkeydown={onEditorKeydown}
+            spellcheck="false"
+            rows="18"
+            disabled={saving}
+          ></textarea>
         </label>
       {/if}
 
@@ -237,6 +323,7 @@
         {:else if dirty}
           <span class="hint">Unsaved changes</span>
         {/if}
+        <span class="stats">{stats.words} words · {stats.chars} chars</span>
       </div>
     {/if}
   </section>
@@ -260,6 +347,15 @@
     display: flex;
     gap: 1rem;
     align-items: stretch;
+  }
+  .edit-view.fullscreen {
+    position: fixed;
+    inset: 0;
+    z-index: 50;
+    background: #fff;
+    padding: 1rem;
+    margin: 0;
+    overflow: auto;
   }
   .panel {
     flex: 0 0 26rem;
@@ -299,6 +395,44 @@
     background: #fff;
     border-bottom-color: #fff;
     font-weight: bold;
+  }
+  .toolbar {
+    display: flex;
+    align-items: stretch;
+    gap: 0.2rem;
+    flex-wrap: wrap;
+  }
+  .toolbar button {
+    border: 1px solid #ccc;
+    background: #fafafa;
+    min-width: 2rem;
+    padding: 0.25rem 0.45rem;
+    cursor: pointer;
+    font-size: 0.85rem;
+    line-height: 1.2;
+  }
+  .toolbar button:hover:not(:disabled) {
+    background: #f0f0f0;
+  }
+  .toolbar button.mono {
+    font-family: ui-monospace, monospace;
+  }
+  .tb-sep {
+    width: 1px;
+    background: #ddd;
+    margin: 0 0.25rem;
+  }
+  .tb-spacer {
+    flex: 1 1 auto;
+  }
+  .tb-toggle {
+    white-space: nowrap;
+  }
+  .stats {
+    margin-left: auto;
+    opacity: 0.6;
+    font-size: 0.8rem;
+    white-space: nowrap;
   }
   .field {
     display: flex;
