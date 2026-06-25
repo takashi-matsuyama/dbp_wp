@@ -1,6 +1,6 @@
 {
   "name": "@dbp-wp/core",
-  "version": "0.2.15",
+  "version": "0.2.16",
   "description": "Core library for DBP WP: WordPress REST client, formula engine, importer, and typesetting data generation.",
   "license": "Apache-2.0",
   "author": "Takashi Matsuyama",

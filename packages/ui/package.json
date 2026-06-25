@@ -1,6 +1,6 @@
 {
   "name": "@dbp-wp/ui",
-  "version": "0.2.15",
+  "version": "0.2.16",
   "description": "DBP WP web UI: table view and spreadsheet (Svelte 5 SPA). Served by the dbp-wp CLI.",
   "license": "Apache-2.0",
   "author": "Takashi Matsuyama",
@@ -33,7 +33,7 @@
     "typecheck": "svelte-check --tsconfig ./tsconfig.json"
   },
   "devDependencies": {
-    "@dbp-wp/core": "0.2.15",
+    "@dbp-wp/core": "0.2.16",
     "@sveltejs/vite-plugin-svelte": "^4.0.0",
     "@tanstack/table-core": "^8.20.5",
     "svelte": "^5.1.0",
