@@ -1,5 +1,12 @@
 import { describe, it, expect } from 'vitest';
-import { applyInline, applyBlock, insertImage, textStats, type TextSelection } from './editorOps';
+import {
+  applyInline,
+  applyBlock,
+  continueBlock,
+  insertImage,
+  textStats,
+  type TextSelection,
+} from './editorOps';
 
 function sel(value: string, start: number, end: number): TextSelection {
   return { value, start, end };
@@ -66,6 +73,21 @@ describe('applyBlock (Markdown — line-aware)', () => {
     const r = applyBlock(sel('a\nb\nc', 2, 3), 'heading', 'markdown'); // selection within line "b"
     expect(r.value).toBe('a\n## b\nc');
   });
+
+  it('uses the requested heading level (### for level 3)', () => {
+    const r = applyBlock(sel('Sub', 0, 3), 'heading', 'markdown', 3);
+    expect(r.value).toBe('### Sub');
+  });
+
+  it('numbers an ordered list across the selected lines', () => {
+    const r = applyBlock(sel('one\ntwo\nthree', 0, 13), 'orderedList', 'markdown');
+    expect(r.value).toBe('1. one\n2. two\n3. three');
+  });
+
+  it('clamps an out-of-range heading level into h1–h6', () => {
+    expect(applyBlock(sel('x', 0, 1), 'heading', 'markdown', 9).value).toBe('###### x');
+    expect(applyBlock(sel('x', 0, 1), 'heading', 'markdown', 0).value).toBe('# x');
+  });
 });
 
 describe('applyBlock (HTML — wrap)', () => {
@@ -90,6 +112,74 @@ describe('applyBlock (HTML — wrap)', () => {
     const r = applyBlock(sel('', 0, 0), 'heading', 'html');
     expect(r.value).toBe('<h2>text</h2>');
     expect(r.value.slice(r.start, r.end)).toBe('text'); // typing replaces "text", keeps the tags
+  });
+
+  it('wraps a heading at the requested level', () => {
+    expect(applyBlock(sel('Sub', 0, 3), 'heading', 'html', 3).value).toBe('<h3>Sub</h3>');
+  });
+
+  it('wraps an ordered list in <ol>', () => {
+    const r = applyBlock(sel('one\ntwo', 0, 7), 'orderedList', 'html');
+    expect(r.value).toBe('<ol>\n  <li>one</li>\n  <li>two</li>\n</ol>');
+  });
+});
+
+describe('continueBlock (Markdown Enter)', () => {
+  // Caret offsets are at the end of the first line unless noted.
+  it('continues an unordered list with the same marker', () => {
+    const r = continueBlock('- one', 5);
+    expect(r).not.toBeNull();
+    expect(r?.value).toBe('- one\n- ');
+    expect(r?.start).toBe(r?.value.length);
+  });
+
+  it('increments an ordered list marker', () => {
+    const r = continueBlock('1. one', 6);
+    expect(r?.value).toBe('1. one\n2. ');
+  });
+
+  it('continues a blockquote', () => {
+    const r = continueBlock('> quoted', 8);
+    expect(r?.value).toBe('> quoted\n> ');
+  });
+
+  it('preserves indentation (nested list)', () => {
+    const r = continueBlock('  - item', 8);
+    expect(r?.value).toBe('  - item\n  - ');
+  });
+
+  it('exits the list when the item is empty (clears the marker line)', () => {
+    const r = continueBlock('- one\n- ', 8); // caret on the empty second marker
+    expect(r?.value).toBe('- one\n');
+    expect(r?.start).toBe(6); // caret at the (now blank) line start
+  });
+
+  it('splits the item when Enter is pressed mid-line', () => {
+    const r = continueBlock('- onetwo', 5); // caret between "one" and "two"
+    expect(r?.value).toBe('- one\n- two');
+  });
+
+  it('returns null when the line has no list marker', () => {
+    expect(continueBlock('plain text', 5)).toBeNull();
+    expect(continueBlock('', 0)).toBeNull();
+  });
+
+  it('returns null when the caret is inside the indent or marker (Enter just splits the line)', () => {
+    expect(continueBlock('- one', 0)).toBeNull(); // caret at the very start
+    expect(continueBlock('- one', 1)).toBeNull(); // caret between marker and space
+    expect(continueBlock('1. one', 2)).toBeNull(); // caret inside the ordered marker
+  });
+
+  it('matches a CRLF line (trailing CR is ignored)', () => {
+    const r = continueBlock('1. one\r\n2. two', 6); // caret at end of the first line, before CRLF
+    expect(r).not.toBeNull();
+    expect(r?.value.startsWith('1. one\n2. ')).toBe(true);
+  });
+
+  it('keeps the original number string when incrementing would overflow Number', () => {
+    const big = '999999999999999999999999';
+    const r = continueBlock(`${big}. x`, `${big}. x`.length);
+    expect(r?.value).toBe(`${big}. x\n${big}. `); // no "1e+24." marker
   });
 });
 

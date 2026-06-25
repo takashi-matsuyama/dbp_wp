@@ -5,6 +5,7 @@
   import {
     applyInline,
     applyBlock,
+    continueBlock,
     insertImage,
     textStats,
     type InlineKind,
@@ -210,10 +211,15 @@
     el.setSelectionRange(r.start, r.end);
   }
 
-  async function runBlock(kind: BlockKind): Promise<void> {
+  async function runBlock(kind: BlockKind, level = 2): Promise<void> {
     const el = activeEl();
     if (!el) return;
-    const r = applyBlock({ value: el.value, start: el.selectionStart, end: el.selectionEnd }, kind, mode);
+    const r = applyBlock(
+      { value: el.value, start: el.selectionStart, end: el.selectionEnd },
+      kind,
+      mode,
+      level,
+    );
     if (mode === 'markdown') markdownText = r.value;
     else htmlText = r.value;
     await tick();
@@ -267,8 +273,28 @@
     syncPreviewScroll();
   }
 
-  // Editor shortcuts: Cmd/Ctrl+S saves, Cmd/Ctrl+B/I apply bold/italic. Other keys fall through.
+  // Editor shortcuts: Enter continues a Markdown list/quote; Cmd/Ctrl+S saves, Cmd/Ctrl+B/I apply
+  // bold/italic. Other keys fall through to the textarea's default handling.
   function onEditorKeydown(e: KeyboardEvent): void {
+    // Never act on a keystroke that is finishing IME composition (e.g. confirming a Japanese
+    // conversion with Enter) — it must reach the textarea as a commit, not trigger a shortcut.
+    if (e.isComposing) return;
+    // Smart list/quote continuation on plain Enter (Markdown line markers; collapsed caret only).
+    if (e.key === 'Enter' && !e.shiftKey && !e.metaKey && !e.ctrlKey && !e.altKey && mode === 'markdown') {
+      const el = activeEl();
+      if (el && el.selectionStart === el.selectionEnd) {
+        const r = continueBlock(el.value, el.selectionStart);
+        if (r) {
+          e.preventDefault();
+          markdownText = r.value;
+          void tick().then(() => {
+            el.focus();
+            el.setSelectionRange(r.start, r.end);
+          });
+        }
+      }
+      return; // plain Enter (no list context) keeps its default behavior
+    }
     if (!(e.metaKey || e.ctrlKey)) return;
     const key = e.key.toLowerCase();
     if (key === 's') {
@@ -462,14 +488,16 @@
       <div class="toolbar" role="toolbar" aria-label="Formatting">
         <button type="button" title="Bold (Cmd/Ctrl+B)" disabled={saving} onclick={() => runInline('bold')}><b>B</b></button>
         <button type="button" title="Italic (Cmd/Ctrl+I)" disabled={saving} onclick={() => runInline('italic')}><i>I</i></button>
-        <button type="button" class="mono" title="Inline code" disabled={saving} onclick={() => runInline('code')}>&lt;/&gt;</button>
-        <button type="button" title="Link" disabled={saving} onclick={() => runInline('link')}>🔗</button>
+        <button type="button" class="mono" title="Inline code" aria-label="Inline code" disabled={saving} onclick={() => runInline('code')}>&lt;/&gt;</button>
+        <button type="button" title="Link" aria-label="Link" disabled={saving} onclick={() => runInline('link')}>🔗</button>
         <span class="tb-sep" aria-hidden="true"></span>
-        <button type="button" title="Heading" disabled={saving} onclick={() => runBlock('heading')}>H2</button>
-        <button type="button" title="Bulleted list" disabled={saving} onclick={() => runBlock('list')}>☰</button>
-        <button type="button" title="Quote" disabled={saving} onclick={() => runBlock('quote')}>❝</button>
+        <button type="button" title="Heading 2" disabled={saving} onclick={() => runBlock('heading', 2)}>H2</button>
+        <button type="button" title="Heading 3" disabled={saving} onclick={() => runBlock('heading', 3)}>H3</button>
+        <button type="button" title="Bulleted list" aria-label="Bulleted list" disabled={saving} onclick={() => runBlock('list')}>☰</button>
+        <button type="button" class="mono" title="Numbered list" aria-label="Numbered list" disabled={saving} onclick={() => runBlock('orderedList')}>1.</button>
+        <button type="button" title="Quote" aria-label="Quote" disabled={saving} onclick={() => runBlock('quote')}>❝</button>
         <span class="tb-sep" aria-hidden="true"></span>
-        <button type="button" title="Insert image" aria-pressed={pickerOpen} disabled={saving} onclick={openPicker}>🖼</button>
+        <button type="button" title="Insert image" aria-label="Insert image" aria-pressed={pickerOpen} disabled={saving} onclick={openPicker}>🖼</button>
         <span class="tb-spacer"></span>
         <button
           type="button"
