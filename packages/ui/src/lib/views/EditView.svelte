@@ -687,7 +687,8 @@
     position: fixed;
     inset: 0;
     z-index: 50;
-    background: #fff;
+    /* System color so the full-screen backdrop follows the light/dark scheme (not always white). */
+    background: Canvas;
     padding: 1rem;
     margin: 0;
     overflow: auto;
@@ -721,14 +722,14 @@
     gap: 0.25rem;
   }
   .mode-tabs button {
-    border: 1px solid #ccc;
-    background: #f4f4f4;
+    /* currentColor-based tints so text stays readable in both light and dark schemes. */
+    border: 1px solid color-mix(in srgb, currentColor 25%, transparent);
+    background: color-mix(in srgb, currentColor 8%, transparent);
     padding: 0.3rem 0.8rem;
     cursor: pointer;
   }
   .mode-tabs button.active {
-    background: #fff;
-    border-bottom-color: #fff;
+    background: color-mix(in srgb, currentColor 16%, transparent);
     font-weight: bold;
   }
   .toolbar {
@@ -738,8 +739,8 @@
     flex-wrap: wrap;
   }
   .toolbar button {
-    border: 1px solid #ccc;
-    background: #fafafa;
+    border: 1px solid color-mix(in srgb, currentColor 30%, transparent);
+    background: color-mix(in srgb, currentColor 10%, transparent);
     min-width: 2rem;
     padding: 0.25rem 0.45rem;
     cursor: pointer;
@@ -747,14 +748,14 @@
     line-height: 1.2;
   }
   .toolbar button:hover:not(:disabled) {
-    background: #f0f0f0;
+    background: color-mix(in srgb, currentColor 18%, transparent);
   }
   .toolbar button.mono {
     font-family: ui-monospace, monospace;
   }
   .tb-sep {
     width: 1px;
-    background: #ddd;
+    background: color-mix(in srgb, currentColor 20%, transparent);
     margin: 0 0.25rem;
   }
   .tb-spacer {
@@ -770,8 +771,8 @@
     white-space: nowrap;
   }
   .img-picker {
-    border: 1px solid #ccc;
-    background: #fafafa;
+    border: 1px solid color-mix(in srgb, currentColor 25%, transparent);
+    background: color-mix(in srgb, currentColor 6%, transparent);
     padding: 0.6rem;
     display: flex;
     flex-direction: column;
@@ -792,8 +793,8 @@
     min-width: 0;
   }
   .upload-btn {
-    border: 1px solid #ccc;
-    background: #fff;
+    border: 1px solid color-mix(in srgb, currentColor 30%, transparent);
+    background: color-mix(in srgb, currentColor 10%, transparent);
     padding: 0.25rem 0.6rem;
     cursor: pointer;
     white-space: nowrap;
@@ -809,7 +810,7 @@
     border: 2px solid transparent;
     padding: 0;
     cursor: pointer;
-    background: #fff;
+    background: color-mix(in srgb, currentColor 6%, transparent);
     aspect-ratio: 1;
     overflow: hidden;
   }
@@ -831,7 +832,7 @@
     display: flex;
     flex-direction: column;
     gap: 0.4rem;
-    border-top: 1px solid #ddd;
+    border-top: 1px solid color-mix(in srgb, currentColor 15%, transparent);
     padding-top: 0.5rem;
   }
   .img-form label {
@@ -863,8 +864,8 @@
     box-sizing: border-box;
   }
   .outline {
-    border: 1px solid #ccc;
-    background: #fafafa;
+    border: 1px solid color-mix(in srgb, currentColor 25%, transparent);
+    background: color-mix(in srgb, currentColor 6%, transparent);
     max-height: 12rem;
     overflow-y: auto;
     font-size: 0.85rem;
@@ -887,7 +888,7 @@
     font-size: 0.85rem;
   }
   .outline-item:hover {
-    background: #eef3ee;
+    background: color-mix(in srgb, currentColor 10%, transparent);
   }
   .outline-lv {
     flex: 0 0 auto;
@@ -929,8 +930,9 @@
   .confirm {
     margin: 0;
     font-size: 0.85rem;
-    background: #fff7e6;
-    border: 1px solid #f0c36d;
+    /* Translucent amber so the warning reads on both light and dark backgrounds. */
+    background: color-mix(in srgb, #f0c36d 18%, transparent);
+    border: 1px solid color-mix(in srgb, #f0c36d 55%, transparent);
     padding: 0.4rem 0.6rem;
   }
   .error {
@@ -953,7 +955,8 @@
     flex: 1 1 auto;
     width: 100%;
     min-height: 70vh;
-    border: 1px solid #ccc;
+    border: 1px solid color-mix(in srgb, currentColor 30%, transparent);
+    /* Kept white: the iframe renders the post as it appears on the (light) published page. */
     background: #fff;
   }
 </style>
