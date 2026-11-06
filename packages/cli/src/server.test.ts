@@ -39,8 +39,15 @@ const mock = vi.hoisted(() => ({ client: {} as MockClient }));
 vi.mock('@dbp-wp/core', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@dbp-wp/core')>();
   // Keep the real error classes (handlers do `e instanceof WpRequestError`); swap only the client.
-  // `new WpClient(creds)` returns the current test's mock client.
-  return { ...actual, WpClient: vi.fn(() => mock.client) };
+  // `new WpClient(creds)` returns the current test's mock client. The implementation must be a
+  // `function`, not an arrow: Vitest constructs the instance when a mock is called with `new`,
+  // and returning an object from a constructor yields that object.
+  return {
+    ...actual,
+    WpClient: vi.fn(function () {
+      return mock.client;
+    }),
+  };
 });
 
 import { RelationError, WpClient, WpRequestError, type WpCredentials } from '@dbp-wp/core';
@@ -1247,7 +1254,9 @@ describe('connection route', () => {
   });
 
   it('POST maps a WpClient constructor throw (bad site URL) to 400', async () => {
-    vi.mocked(WpClient).mockImplementationOnce(() => {
+    // A `function`, not an arrow: under `new` an arrow throws "is not a constructor" instead of
+    // the intended error (which also maps to 400, hence the error-message assertion below).
+    vi.mocked(WpClient).mockImplementationOnce(function () {
       throw new Error('Invalid site URL');
     });
     const res = await call('POST', '/api/connection', {
@@ -1255,6 +1264,7 @@ describe('connection route', () => {
       body: JSON.stringify({ siteUrl: 'http://[bad', username: 'u', applicationPassword: 'p' }),
     });
     expect(res.status).toBe(400);
+    expect(String((JSON.parse(res.body) as { error: string }).error)).toBe('Invalid site URL');
     // Prove the one-shot throw was consumed (it constructs WpClient), so it can't bleed into the
     // next test — vi.clearAllMocks() clears call history but not a queued mockImplementationOnce.
     expect(vi.mocked(WpClient)).toHaveBeenCalledTimes(1);
