@@ -1,0 +1,58 @@
+name: CI
+
+# Runs the same gates as the `verify` job in release.yml on every pull request
+# to main and every push to main, so a change that breaks the install, build, types,
+# tests, lint, or the production audit fails a check before it is merged.
+# This includes Dependabot pull requests, which would otherwise show as
+# mergeable without any check having run.
+#
+# Keep the steps in sync with the `verify` job in release.yml.
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Verify (typecheck / test / lint / build / prod audit)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version-file: '.nvmrc'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Build before testing: the CLI and UI tests import @dbp-wp/core from its built dist.
+      - name: Build
+        run: npm run build
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Production dependency audit (must be clean)
+        run: npm audit --omit=dev
