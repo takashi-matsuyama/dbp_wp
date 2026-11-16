@@ -72,10 +72,109 @@ interface Scope {
   current?: unknown;
 }
 
-// Order matters: triple-brace and the each tags must be tried before the generic `{{ }}`.
-// `[\s\S]` (not `.`) so a tag may span newlines.
-const TAG =
-  /(\{\{\{\s*([\s\S]+?)\s*\}\}\})|(\{\{\s*#each\s+([\s\S]+?)\s*\}\})|(\{\{\s*\/each\s*\}\})|(\{\{\s*([\s\S]+?)\s*\}\})/g;
+/** One template tag found by {@link scanTags}: `template.slice(start, end)` is the whole tag. */
+export interface TemplateTag {
+  kind: 'raw' | 'each' | 'endEach' | 'var';
+  start: number;
+  end: number;
+  /** The tag's path, trimmed (`''` for `endEach`). */
+  path: string;
+}
+
+const WHITESPACE = /\s/;
+
+/**
+ * Find the template tags, left to right, in linear time.
+ *
+ * The result is exactly what this regex returned (as a global `exec` loop, with the
+ * alternatives tried in this order at each position):
+ *
+ *   /(\{\{\{\s*([\s\S]+?)\s*\}\}\})|(\{\{\s*#each\s+([\s\S]+?)\s*\}\})|(\{\{\s*\/each\s*\}\})|(\{\{\s*([\s\S]+?)\s*\}\})/g
+ *
+ * That regex backtracked polynomially on unclosed tags (e.g. `{{{{` followed by a long run
+ * of spaces took about a minute for 5,000 spaces). Here every alternative is decided in
+ * constant time from lookup tables built in one pass, and only `{{` positions are tried.
+ */
+export function scanTags(template: string): TemplateTag[] {
+  const n = template.length;
+  // wsEnd[i]: the first index >= i that is not whitespace (`\s`), or n.
+  const wsEnd = new Int32Array(n + 1);
+  wsEnd[n] = n;
+  for (let i = n - 1; i >= 0; i--) {
+    wsEnd[i] = WHITESPACE.test(template.charAt(i)) ? (wsEnd[i + 1] ?? n) : i;
+  }
+  // next2[i] / next3[i]: the first index >= i where `}}` / `}}}` starts, or -1.
+  const next2 = new Int32Array(n + 2).fill(-1);
+  const next3 = new Int32Array(n + 2).fill(-1);
+  for (let i = n - 1; i >= 0; i--) {
+    next2[i] = template.startsWith('}}', i) ? i : (next2[i + 1] ?? -1);
+    next3[i] = template.startsWith('}}}', i) ? i : (next3[i + 1] ?? -1);
+  }
+  const at = (table: Int32Array, i: number): number => table[i] ?? -1;
+
+  // The body of a tag: a leading whitespace run (now ending at `s`, `lead` long), then a lazy
+  // body, optional whitespace, and the closer. With the longest leading run the regex closes
+  // at the first closer that starts at least one character after `s`. When there is none it
+  // gives leading whitespace back to the body, which can only succeed when a closer starts at
+  // `s` itself; the body is then one whitespace character, so the path is empty. `minLead` is
+  // the shortest leading run the pattern allows (0 for `\s*`, 1 for `\s+`).
+  const closeBody = (
+    s: number,
+    lead: number,
+    minLead: number,
+    next: Int32Array,
+    closeLength: number,
+  ): { end: number; path: string } | null => {
+    const close = at(next, s + 1);
+    if (close !== -1) {
+      return { end: close + closeLength, path: template.slice(s, close).trim() };
+    }
+    if (lead > minLead && at(next, s) === s) {
+      return { end: s + closeLength, path: '' };
+    }
+    return null;
+  };
+
+  const matchAt = (p: number): TemplateTag | null => {
+    // {{{ raw }}}
+    if (template.startsWith('{{{', p)) {
+      const s = at(wsEnd, p + 3);
+      const body = closeBody(s, s - (p + 3), 0, next3, 3);
+      if (body) return { kind: 'raw', start: p, ...body };
+    }
+    const a = at(wsEnd, p + 2);
+    // {{#each path}}
+    if (template.startsWith('#each', a)) {
+      const s = at(wsEnd, a + 5);
+      const lead = s - (a + 5);
+      if (lead >= 1) {
+        const body = closeBody(s, lead, 1, next2, 2);
+        if (body) return { kind: 'each', start: p, ...body };
+      }
+    }
+    // {{/each}}
+    if (template.startsWith('/each', a)) {
+      const b = at(wsEnd, a + 5);
+      if (template.startsWith('}}', b)) return { kind: 'endEach', start: p, end: b + 2, path: '' };
+    }
+    // {{ var }}
+    const body = closeBody(a, a - (p + 2), 0, next2, 2);
+    return body ? { kind: 'var', start: p, ...body } : null;
+  };
+
+  const tags: TemplateTag[] = [];
+  let p = template.indexOf('{{');
+  while (p !== -1) {
+    const tag = matchAt(p);
+    if (tag) {
+      tags.push(tag);
+      p = template.indexOf('{{', tag.end);
+    } else {
+      p = template.indexOf('{{', p + 1);
+    }
+  }
+  return tags;
+}
 
 /** Parse a template string into a node tree, validating `{{#each}}` nesting. */
 function parseTemplate(template: string): TemplateNode[] {
@@ -90,31 +189,25 @@ function parseTemplate(template: string): TemplateNode[] {
   };
 
   let last = 0;
-  TAG.lastIndex = 0;
-  let m: RegExpExecArray | null;
-  while ((m = TAG.exec(template)) !== null) {
-    pushText(template.slice(last, m.index));
-    last = TAG.lastIndex;
-    if (m[2] !== undefined) {
-      // {{{ raw }}}
-      current.push({ kind: 'var', path: m[2].trim(), raw: true });
-    } else if (m[4] !== undefined) {
-      // {{#each path}}
-      const node: EachNode = { kind: 'each', path: m[4].trim(), body: [] };
+  for (const tag of scanTags(template)) {
+    pushText(template.slice(last, tag.start));
+    last = tag.end;
+    if (tag.kind === 'raw') {
+      current.push({ kind: 'var', path: tag.path, raw: true });
+    } else if (tag.kind === 'each') {
+      const node: EachNode = { kind: 'each', path: tag.path, body: [] };
       current.push(node);
       parents.push(current);
       current = node.body;
       open.push(node);
-    } else if (m[5] !== undefined) {
-      // {{/each}}
+    } else if (tag.kind === 'endEach') {
       if (open.length === 0) {
         throw new TemplateParseError('Unexpected {{/each}} without a matching {{#each}}.');
       }
       open.pop();
       current = parents.pop() ?? root;
-    } else if (m[7] !== undefined) {
-      // {{ var }}
-      current.push({ kind: 'var', path: m[7].trim(), raw: false });
+    } else {
+      current.push({ kind: 'var', path: tag.path, raw: false });
     }
   }
   pushText(template.slice(last));

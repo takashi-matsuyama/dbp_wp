@@ -3,8 +3,10 @@ import {
   buildPrintRecord,
   renderRecordTemplate,
   renderTemplate,
+  scanTags,
   TemplateParseError,
   type PrintRecord,
+  type TemplateTag,
 } from './print';
 import type { WpPostResponse } from './types';
 
@@ -82,6 +84,104 @@ describe('renderTemplate', () => {
   it('throws TemplateParseError on unbalanced each', () => {
     expect(() => renderTemplate('{{#each tax.category}}x', record())).toThrow(TemplateParseError);
     expect(() => renderTemplate('x{{/each}}', record())).toThrow(TemplateParseError);
+  });
+
+  it('handles long unclosed tags in linear time', () => {
+    // The previous regex took about a minute on 5,000 spaces after `{{{{{{`.
+    const spaces = ' '.repeat(200_000);
+    for (const head of ['{{{{{{', '{{{{{{a', '{{{{#each ', '{{{{', '{{{{a']) {
+      const tpl = head + spaces;
+      expect(renderTemplate(tpl, record())).toBe(tpl);
+    }
+    const closed = `{{{{{{${spaces}}}`;
+    expect(scanTags(closed)).toEqual([
+      { kind: 'var', start: 0, end: closed.length, path: '{{{{' },
+    ]);
+  });
+});
+
+describe('scanTags', () => {
+  // The regex the scanner replaced. It is the reference: on every input the scanner must
+  // return the same matches it did. Only short inputs are fed to it, so it stays fast.
+  const LEGACY_TAG =
+    /(\{\{\{\s*([\s\S]+?)\s*\}\}\})|(\{\{\s*#each\s+([\s\S]+?)\s*\}\})|(\{\{\s*\/each\s*\}\})|(\{\{\s*([\s\S]+?)\s*\}\})/g;
+
+  function legacyTags(template: string): TemplateTag[] {
+    const tags: TemplateTag[] = [];
+    LEGACY_TAG.lastIndex = 0;
+    let m: RegExpExecArray | null;
+    while ((m = LEGACY_TAG.exec(template)) !== null) {
+      const start = m.index;
+      const end = LEGACY_TAG.lastIndex;
+      if (m[2] !== undefined) tags.push({ kind: 'raw', start, end, path: m[2].trim() });
+      else if (m[4] !== undefined) tags.push({ kind: 'each', start, end, path: m[4].trim() });
+      else if (m[5] !== undefined) tags.push({ kind: 'endEach', start, end, path: '' });
+      else if (m[7] !== undefined) tags.push({ kind: 'var', start, end, path: m[7].trim() });
+    }
+    return tags;
+  }
+
+  it('matches well-formed tags', () => {
+    const tpl = '<p>{{ title }}</p>{{{ content }}}{{#each tax.category}}[{{this}}]{{/each}}';
+    expect(scanTags(tpl)).toEqual(legacyTags(tpl));
+    expect(scanTags(tpl).map((t) => [t.kind, t.path])).toEqual([
+      ['var', 'title'],
+      ['raw', 'content'],
+      ['each', 'tax.category'],
+      ['var', 'this'],
+      ['endEach', ''],
+    ]);
+  });
+
+  it('returns the same matches as the previous regex on edge cases', () => {
+    const cases = [
+      '',
+      '{{',
+      '{{}}',
+      '{{ }}',
+      '{{  }}',
+      '{{{}}}',
+      '{{{ }}}',
+      '{{{  }}}}',
+      '{{{ }}} {{{x}}}',
+      '{{#each}}',
+      '{{#each }}',
+      '{{#each  }}',
+      '{{#eachx}}',
+      '{{ #each a }}x{{ /each }}',
+      '{{/each}}',
+      '{{/ each}}',
+      '{{\n#each\na\n}}',
+      '{{{{a}}}}',
+      '{{a}}}',
+      '}}{{',
+      '{{ x }}',
+      '{{ x}}',
+    ];
+    for (const tpl of cases) {
+      expect(scanTags(tpl), JSON.stringify(tpl)).toEqual(legacyTags(tpl));
+    }
+  });
+
+  it('returns the same matches as the previous regex on generated inputs', () => {
+    // Small deterministic PRNG (mulberry32) so a failure reproduces.
+    let seed = 0x5eed;
+    const random = (): number => {
+      seed = (seed + 0x6d2b79f5) | 0;
+      let t = seed;
+      t = Math.imul(t ^ (t >>> 15), t | 1);
+      t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+    const pieces = ['{', '}', '{{', '}}', '{{{', '}}}', ' ', '  ', '\n', '\t', '#each', '/each', 'a', 'x.y', '#', '/'];
+    for (let i = 0; i < 20_000; i++) {
+      let tpl = '';
+      const count = 1 + Math.floor(random() * 10);
+      for (let j = 0; j < count; j++) {
+        tpl += pieces[Math.floor(random() * pieces.length)];
+      }
+      expect(scanTags(tpl), JSON.stringify(tpl)).toEqual(legacyTags(tpl));
+    }
   });
 });
 
