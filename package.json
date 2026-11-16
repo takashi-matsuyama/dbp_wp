@@ -21,7 +21,7 @@
     "format": "prettier --write ."
   },
   "devDependencies": {
-    "@eslint/js": "^9.13.0",
+    "@eslint/js": "^10.0.1",
     "@types/node": "^22.7.5",
     "eslint": "^9.13.0",
     "eslint-plugin-svelte": "^2.46.0",
